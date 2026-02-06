@@ -145,59 +145,74 @@ if st.button("Get Grading", type="primary"):
             st.subheader("Copy to Clipboard")
             
             # Generate the formatted strings
-            copy_lines = []
+            # List of dicts: {'text': str, 'grade_val': int}
+            copy_items = []
             
             # We iterate over the ORIGINAL flat_data (list of dicts) before numeric conversion 
-            # so we have granular control over the data, OR we can use the DataFrame row.
-            # Using the DataFrame `final_df` is risky because we might have converted to NaNs.
-            # Let's use `flat_data` but filter by `cols_to_show` logic essentially.
+            # so we have granular control over the data.
             
             for row in flat_data:
-                # Skip "Not Found" rows for copy usually? Or include them?
-                # User example showed valid players. Let's exclude ones with "❌" match status for cleanliness?
-                # Or perhaps include them so user knows what's missing. User didn't specify.
-                # Assuming valid players only for the email format.
+                # Skip "Not Found" rows
                 if "❌" in row["Match Status"]:
                     continue
                     
-                name = row["Name"]
+                raw_name = row["Name"] # "Surname, Forename"
                 pnum = row["Pnum"]
                 
-                # Grade Logic
-                # "Nathanael Loch [30187] (1515)"
+                # 1. Format Name: "Surname, Forename" -> "Forename Surname"
+                display_name = raw_name
+                if ',' in raw_name:
+                    parts = raw_name.split(',', 1)
+                    if len(parts) == 2:
+                        display_name = f"{parts[1].strip()} {parts[0].strip()}"
+                
+                # 2. Grade Logic
                 # Priority: Published (Std) > Live (Std) > None
                 # BUT ONLY IF CHECKED
                 
-                grade_val = ""
+                grade_str = ""
+                sort_val = -1 # Default low value for ungraded/missing
                 
                 # Check 1: Is Published (Std) checked and does it exist?
                 if show_std_pub and row.get("Published (Std)"):
-                     grade_val = row.get("Published (Std)")
+                     grade_str = row.get("Published (Std)")
                 # Check 2: Else if Live (Std) checked and exists?
                 elif show_std_live and row.get("Live (Std)"):
-                     grade_val = row.get("Live (Std)")
+                     grade_str = row.get("Live (Std)")
+                
+                # Convert to int for sorting
+                if grade_str and grade_str.isdigit():
+                    sort_val = int(grade_str)
                 
                 # Construct string
                 # <Name> [<Pnum>] (<Grade>)
                 # If no grade selected/found: <Name> [<Pnum>]
                 
-                line = f"{name} [{pnum}]"
-                if grade_val:
-                    line += f" ({grade_val})"
+                line = f"{display_name} [{pnum}]"
+                if grade_str:
+                    line += f" ({grade_str})"
                 
-                copy_lines.append(line)
+                copy_items.append({
+                    'text': line,
+                    'sort_val': sort_val
+                })
             
-            if copy_lines:
+            if copy_items:
+                # Sort descending by grade
+                copy_items.sort(key=lambda x: x['sort_val'], reverse=True)
+                
+                sorted_lines = [item['text'] for item in copy_items]
+                
                 c1, c2 = st.columns(2)
                 
                 with c1:
-                    st.markdown("##### Multiline Copy")
-                    multiline_text = "\n".join(copy_lines)
+                    st.markdown("##### Multiline Copy (Sorted)")
+                    multiline_text = "\n".join(sorted_lines)
                     st.code(multiline_text, language="text")
                     
                 with c2:
-                    st.markdown("##### Single Line Copy")
-                    singleline_text = " ".join(copy_lines)
+                    st.markdown("##### Single Line Copy (Sorted)")
+                    singleline_text = " ".join(sorted_lines)
                     st.code(singleline_text, language="text")
             
             else:
