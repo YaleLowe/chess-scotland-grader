@@ -1,12 +1,24 @@
 import streamlit as st
 import pandas as pd
-from chess_grading import get_player_grading
+from chess_grading import get_player_grading, get_clubs_list
 
 st.set_page_config(
     page_title="Chess Scotland Grading Lookup",
     page_icon="♟️",
     layout="wide"
 )
+
+# --- Load Club Data for UI ---
+CLUBS = get_clubs_list()
+CLUB_MAP = {c['code']: c['name'] for c in CLUBS} # Code -> Name
+
+# --- Sidebar: Club Reference ---
+with st.sidebar:
+    st.header("ℹ️ Club Reference")
+    st.markdown("Use these codes or names to filter by club.")
+    if CLUBS:
+        club_df = pd.DataFrame(CLUBS)
+        st.dataframe(club_df, hide_index=True, use_container_width=True)
 
 
 # --- Session State Initialization ---
@@ -74,9 +86,10 @@ if st.button("Get Grading", type="primary"):
             name_part = parts[0].strip()
             club_part = parts[1].strip() if len(parts) > 1 else ""
             
-            if not name_part: continue
+            # Allow empty name IF club part exists (e.g. ", Stirling")
+            if not name_part and not club_part: continue
             
-            is_single = len(name_part.split()) == 1
+            is_single = len(name_part.split()) == 1 if name_part else False
             
             parsed_queries.append({
                 'raw': line,
@@ -112,9 +125,15 @@ if st.session_state.active_names:
     
     # Flatten results
     flat_data = []
+    
+    count_exact = 0
+    count_possible = 0 # Exact + Multiple
+    count_none = 0 # None + Invalid
+    
     for input_name, matches in results_map.items():
         if matches and isinstance(matches[0], dict) and matches[0].get('invalid_query'):
             # Handle Invalid Query (Name < 3 chars)
+            count_none += 1
             placeholder = {
                 "Match Status": "⚠️ Ignored",
                 "Name": f"{input_name} (Min 3 chars required)",
@@ -127,6 +146,7 @@ if st.session_state.active_names:
         
         elif not matches:
             # Not Found
+            count_none += 1
             placeholder = {
                 "Match Status": "❌",
                 "Name": f"{input_name} (Not Found)",
@@ -137,6 +157,13 @@ if st.session_state.active_names:
             }
             flat_data.append(placeholder)
         else:
+            # Matches Found
+            if len(matches) == 1:
+                count_exact += 1
+            
+            # Count ALL matches for "Possible Matches" (User definition: Total ✅ + Total ⚠️)
+            count_possible += len(matches)
+                
             for match in matches:
                 row = match.copy()
                 
@@ -145,11 +172,17 @@ if st.session_state.active_names:
                 if len(matches) > 1:
                     status_icon = "⚠️ Multiple"
 
+                # Format Club: Code (Full Name)
+                c_code = row.get('club', '')
+                c_display = c_code
+                if c_code in CLUB_MAP:
+                     c_display = f"{c_code} ({CLUB_MAP[c_code]})"
+
                 display_row = {
                     "Match Status": status_icon,
                     "Name": row.get('name', ''),
                     "Pnum": row.get('pnum', ''),
-                    "Club": row.get('club', ''),
+                    "Club": c_display, # Use formatted club
                     "Age": row.get('age', ''),
                     "Live (Std)": row.get('standard_live', ''),
                     "Published (Std)": row.get('standard_published', ''),
@@ -159,6 +192,54 @@ if st.session_state.active_names:
                     "Published (Blitz)": row.get('blitz_published', ''),
                 }
                 flat_data.append(display_row)
+    
+    # --- Deduplication Logic ---
+    # Prioritize Exact Matches (✅) over Multiple (⚠️)
+    unique_data = {}
+    placeholders = []
+    
+    for row in flat_data:
+        # Separate valid player rows from placeholders (Ignored/Not Found)
+        if "⚠️ Ignored" in row['Match Status'] or "❌" in row['Match Status']:
+            placeholders.append(row)
+            continue
+            
+        pnum = row.get('Pnum')
+        name = row.get('Name')
+        # Use Pnum as key if exists, else Name (fallback)
+        key = str(pnum) if pnum else name
+        
+        if key in unique_data:
+            existing = unique_data[key]
+            # Replace existing if current is ✅ and existing is NOT
+            if "✅" in row['Match Status'] and "✅" not in existing['Match Status']:
+                 unique_data[key] = row
+            # Else keep existing (or overwriting doesn't matter if both same)
+        else:
+            unique_data[key] = row
+            
+    # Reconstruct flat_data with unique rows + placeholders
+    flat_data = list(unique_data.values()) + placeholders
+    
+    # --- Recalculate Tallies on Unique Data ---
+    # Only count valid rows for Exact/Possible
+    count_exact = 0
+    count_possible = 0
+    
+    for row in unique_data.values():
+        count_possible += 1
+        if "✅" in row['Match Status']:
+            count_exact += 1
+            
+    # count_none tracks invalid queries from the loop, but we also have placeholders in flat_data
+    # Let's count placeholders for consistency
+    count_none = len(placeholders)
+
+    # --- Result Tallies ---
+    t_col1, t_col2, t_col3 = st.columns(3)
+    t_col1.metric("Exact Matches", count_exact)
+    t_col2.metric("Possible Matches", count_possible)
+    t_col3.metric("Non-existent/Invalid", count_none)
     
     if flat_data:
         df = pd.DataFrame(flat_data)
@@ -201,67 +282,95 @@ if st.session_state.active_names:
         # --- Copy Functionality ---
         st.divider()
         st.subheader("Copy to Clipboard")
+        st.caption("Copy formatted lists for emails or tournaments.")
         
-        # Generate the formatted strings
+        # Generate Copy String
+        # Format: "Name [Pnum] (Grade)"
+        # Grade Priority: Std Pub > Std Live > Alg Pub > Alg Live > Blitz Pub > Blitz Live
+        
         copy_items = []
         
+        # Define Priority List of (Key, CheckboxState)
+        priority_list = [
+            ('standard_published', show_std_pub),
+            ('standard_live', show_std_live),
+            ('allegro_published', show_alg_pub),
+            ('allegro_live', show_alg_live),
+            ('blitz_published', show_blitz_pub),
+            ('blitz_live', show_blitz_live)
+        ]
+        
+        # Map keys to display names in 'row' dict (from flat_data)
+        flat_key_map = {
+            'standard_published': "Published (Std)",
+            'standard_live': "Live (Std)",
+            'allegro_published': "Published (Alg)",
+            'allegro_live': "Live (Alg)",
+            'blitz_published': "Published (Blitz)",
+            'blitz_live': "Live (Blitz)"
+        }
+
+        # Iterate over flat_data
         for row in flat_data:
-            # Skip "Not Found" rows
-            if "❌" in row["Match Status"]:
+            # Skip placeholder rows
+            if "⚠️ Ignored" in str(row['Match Status']) or "❌" in str(row['Match Status']):
                 continue
                 
-            raw_name = row["Name"]
-            pnum = row["Pnum"]
+            raw_name = row.get('Name', '')
+            pnum = row.get('Pnum', '')
             
-            # 1. Format Name
+            # 1. Format Name: "Surname, Forename" -> "Forename Surname"
             display_name = raw_name
             if ',' in raw_name:
-                parts = raw_name.split(',', 1)
-                if len(parts) == 2:
-                    display_name = f"{parts[1].strip()} {parts[0].strip()}"
+                n_parts = raw_name.split(',', 1)
+                if len(n_parts) == 2:
+                    display_name = f"{n_parts[1].strip()} {n_parts[0].strip()}"
             
-            # 2. Grade Logic
-            # Priority: Published (Std) > Live (Std)
-            grade_str = ""
+            # Determine Grade to show
+            grade = ""
             sort_val = -1
             
-            if show_std_pub and row.get("Published (Std)"):
-                    grade_str = row.get("Published (Std)")
-            elif show_std_live and row.get("Live (Std)"):
-                    grade_str = row.get("Live (Std)")
+            for key, is_checked in priority_list:
+                if is_checked:
+                    raw_val = row.get(flat_key_map[key], '')
+                    if raw_val and str(raw_val).strip():
+                        grade = str(raw_val)
+                        # Try to get numeric value for sorting
+                        try:
+                            sort_val = int(grade)
+                        except ValueError:
+                            pass
+                        break
             
-            if grade_str and str(grade_str).isdigit():
-                sort_val = int(grade_str)
+            # Build String
+            # format: Name [Pnum] (Grade)
+            parts = [display_name]
             
-            line = f"{display_name} [{pnum}]"
-            if grade_str:
-                line += f" ({grade_str})"
-            
+            if show_pnum and pnum:
+                parts.append(f"[{pnum}]")
+                
+            if grade:
+                parts.append(f"({grade})")
+                
             copy_items.append({
-                'text': line,
+                'text': " ".join(parts),
                 'sort_val': sort_val
             })
+            
+        c1, c2 = st.columns(2)
         
-        if copy_items:
+        with c1:
+            st.markdown("##### Multi-line Copy")
             # Sort descending by grade
             copy_items.sort(key=lambda x: x['sort_val'], reverse=True)
+            sorted_lines = [str(item['text']) for item in copy_items]
+            multiline_text = "\n".join(sorted_lines)
+            st.code(multiline_text, language="text")
             
-            sorted_lines = [item['text'] for item in copy_items]
-            
-            c1, c2 = st.columns(2)
-            
-            with c1:
-                st.markdown("##### Multiline Copy (Sorted)")
-                multiline_text = "\n".join(sorted_lines)
-                st.code(multiline_text, language="text")
-                
-            with c2:
-                st.markdown("##### Single Line Copy (Sorted)")
-                singleline_text = ", ".join(sorted_lines)
-                st.code(singleline_text, language="text")
-        
-        else:
-            st.info("No valid player data to copy.")
+        with c2:
+            st.markdown("##### Single Line Copy (Sorted)")
+            # Single line sorted alphabetically by name (text)
+            alpha_sorted_lines = sorted([str(item['text']) for item in copy_items])
+            singleline_text = ", ".join(alpha_sorted_lines) 
+            st.code(singleline_text, language="text")
 
-    else:
-        st.error("No data found.")

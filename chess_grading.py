@@ -213,6 +213,25 @@ def load_club_data():
     except FileNotFoundError:
         print("Warning: club_names.txt not found. Club lookup will be limited.")
 
+def get_clubs_list():
+    """Returns a list of {'name': name, 'code': code} for UI display."""
+    load_club_data()
+    # CLUB_DATA is name_lower -> code. 
+    # We want the original casing. Since we didn't store it in CLUB_DATA (we stored lower keys),
+    # we should probably re-read or adjust load_club_data.
+    # Actually, simpler: just read the file again or store proper casing in CLUB_DATA?
+    # Let's adjust load_club_data to store a separate display list or just re-read here since it's one-off for UI.
+    clubs = []
+    try:
+        with open('club_names.txt', 'r', encoding='utf-8') as f:
+            for line in f:
+                if ',' in line:
+                    parts = line.split(',')
+                    clubs.append({'name': parts[0].strip(), 'code': parts[1].strip()})
+    except FileNotFoundError:
+        pass
+    return clubs
+
 def get_club_code(query):
     """
     Resolves a club query string to a 2-letter code.
