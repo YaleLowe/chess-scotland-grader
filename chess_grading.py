@@ -35,7 +35,7 @@ def get_session_and_token():
         
     return session, token_input['value']
 
-def search_player(session, csrf_token, forename, surname):
+def search_player(session, csrf_token, forename, surname, club=""):
     """
     Sends the specific XHR request to the handle-form endpoint.
     """
@@ -55,7 +55,7 @@ def search_player(session, csrf_token, forename, surname):
         'surname': (None, surname),
         'pnum': (None, ''),
         'gender': (None, ''),
-        'club': (None, ''),
+        'club': (None, club),
         'fide_fed': (None, ''),
         'min_age': (None, ''),
         'max_age': (None, ''),
@@ -144,7 +144,17 @@ def parse_results(html_content, surname_filter=None):
                  if not potential_club.has_attr('data-column'):
                      club = potential_club.get_text(strip=True)
 
-            status = status_tag.get_text(strip=True) if status_tag else ""
+            # Status -> Age conversion
+            raw_status = status_tag.get_text(strip=True) if status_tag else ""
+            age = raw_status
+            if raw_status == 'A':
+                age = "Adult"
+            elif raw_status == 'NEW':
+                age = "New"
+            elif raw_status == 'J?':
+                age = "Junior"
+            elif raw_status.startswith('J') and raw_status[1:].isdigit():
+                age = raw_status[1:] # Remove 'J', keep number
 
             # Helper to get text safe
             def get_text_safe(tag):
@@ -157,7 +167,7 @@ def parse_results(html_content, surname_filter=None):
                 "pnum": pnum,
                 "name": name,
                 "club": club,
-                "status": status,
+                "age": age,
                 "standard_published": get_text_safe(std_pub_tag),
                 "standard_live": get_text_safe(std_live_tag),
                 "allegro_published": get_text_safe(alg_pub_tag),
@@ -169,10 +179,80 @@ def parse_results(html_content, surname_filter=None):
                 
     return results
 
-def get_player_grading(names_list):
+def get_player_grading(queries):
     """
-    Main API function to get grading for a list of names.
-    Returns a dictionary mapping input name to a list of found player dictionaries.
+    Main API function to get grading for a list of queries.
+    Each query is a dict: {'raw': str, 'name': str, 'club': str, 'is_single': bool}
+    Returns a dictionary mapping 'raw' input line to a list of found player dictionaries.
+    """
+    session, csrf_token = get_session_and_token()
+    
+    if not session or not csrf_token:
+        print("Failed to initialize session.")
+        return {}
+
+
+# --- Club Lookup Logic ---
+CLUB_DATA = {}
+
+def load_club_data():
+    """Loads club names and abbreviations from club_names.txt"""
+    global CLUB_DATA
+    if CLUB_DATA: return # Already loaded
+    
+    try:
+        with open('club_names.txt', 'r', encoding='utf-8') as f:
+            for line in f:
+                if ',' in line:
+                    parts = line.split(',')
+                    # Format: "Club Name, AB"
+                    # Store: "club name" -> "AB"
+                    fullname = parts[0].strip()
+                    abbrev = parts[1].strip()
+                    CLUB_DATA[fullname.lower()] = abbrev
+    except FileNotFoundError:
+        print("Warning: club_names.txt not found. Club lookup will be limited.")
+
+def get_club_code(query):
+    """
+    Resolves a club query string to a 2-letter code.
+    Strategy:
+    1. If 2 chars, assume code (case-insensitive).
+    2. Exact name match.
+    3. Substring match (input is substring of club name).
+       Prioritize shortest club name match (e.g. "Stirling" -> "ST" over "Stirling Univ")
+    """
+    if not query: return ""
+    query = query.strip()
+    
+    # 1. 2-Char Check: Always treat as code
+    if len(query) == 2:
+        return query.upper()
+    
+    load_club_data()
+    q_lower = query.lower()
+    
+    # 2. Exact Match
+    if q_lower in CLUB_DATA:
+        return CLUB_DATA[q_lower]
+        
+    # 3. Substring Match
+    # Find all keys that contain query
+    matches = [k for k in CLUB_DATA.keys() if q_lower in k]
+    
+    if matches:
+        # Sort by length to find "best" match (e.g. "Stirling" vs "Stirling University")
+        matches.sort(key=len)
+        best_match = matches[0]
+        return CLUB_DATA[best_match]
+        
+    return "" # No match found
+
+def get_player_grading(queries):
+    """
+    Main API function to get grading for a list of queries.
+    Each query is a dict: {'raw': str, 'name': str, 'club': str, 'is_single': bool}
+    Returns a dictionary mapping 'raw' input line to a list of found player dictionaries.
     """
     session, csrf_token = get_session_and_token()
     
@@ -182,20 +262,79 @@ def get_player_grading(names_list):
 
     results_map = {}
     
-    for full_name in names_list:
-        parts = full_name.strip().split()
-        if len(parts) < 2:
-            # Handle single names or empty? currently skipping
-            results_map[full_name] = []
-            continue
+    # Ensure data loaded
+    load_club_data()
+    
+    for query in queries:
+        raw_key = query['raw'] # Use the original line as the key
+        name_part = query['name']
+        club_raw = query.get('club', '')
+        is_single = query.get('is_single', False)
         
-        # Logic: Last word is surname
-        lname = parts[-1]
-        fname = " ".join(parts[:-1])
+        # Resolve Club Code
+        club_code = ""
+        # Check 1: Explicit club part
+        if club_raw:
+            club_code = get_club_code(club_raw)
         
-        html_response = search_player(session, csrf_token, fname, lname)
-        matches = parse_results(html_response, surname_filter=lname)
-        results_map[full_name] = matches
+        # Check 2: Implicit Club Code (if name is just 2 chars and no club specified)
+        # "ST" -> name="ST", club="" -> Treat as Club Code "ST", Name=""
+        if not club_code and is_single and len(name_part) == 2:
+             club_code = name_part.upper()
+             name_part = "" # Clear name to avoid searching for "ST" player
+
+        # --- Name Length Constraint ---
+        # Rule: Name must be >= 3 chars, UNLESS name is empty (Pure Club Search)
+        matches = []
+        is_invalid = False
+        
+        if name_part and len(name_part) < 3:
+            # Name too short
+            is_invalid = True
+        else:
+            # Execute Search
+            
+            # Case A: Club Search Only (Name is empty)
+            if not name_part and club_code:
+                 # Search for all players in club? checking if backend supports empty name
+                 # Based on form, usually requires at least one field. Club is a field.
+                 html = search_player(session, csrf_token, forename="", surname="", club=club_code)
+                 matches = parse_results(html)
+            
+            # Case B: Standard Name Search
+            elif name_part:
+                if is_single:
+                    # Smart Search: Try Forename then Surname
+                    html_1 = search_player(session, csrf_token, forename=name_part, surname="", club=club_code)
+                    res_1 = parse_results(html_1) 
+                    
+                    html_2 = search_player(session, csrf_token, forename="", surname=name_part, club=club_code)
+                    res_2 = parse_results(html_2)
+                    
+                    # Merge and Dedup
+                    seen_pnums = set()
+                    for p in res_1 + res_2:
+                        if p['pnum'] not in seen_pnums:
+                            matches.append(p)
+                            seen_pnums.add(p['pnum'])
+                else:
+                    # Standard Search
+                    parts = name_part.strip().split()
+                    lname = parts[-1]
+                    fname = " ".join(parts[:-1])
+                    
+                    html_response = search_player(session, csrf_token, fname, lname, club=club_code)
+                    matches = parse_results(html_response, surname_filter=lname)
+
+        if is_invalid:
+             # Add a special marker for invalid query
+             # We reuse the player dict structure but mark it?
+             # Or just handle it in app.py? 
+             # Let's return a special "Invalid" object/list to signal app.py
+             # We'll use a specific dict structure that app.py can recognize
+             matches = [{'invalid_query': True}]
+
+        results_map[raw_key] = matches
         
     return results_map
 

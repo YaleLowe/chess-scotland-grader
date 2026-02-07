@@ -1,0 +1,284 @@
+Aberdeen Chess Academy, AC
+Aberdeen University, AU
+Aberdeenshire resident, AB
+Aberlady PS, E1
+Affiliate Organisation, FF
+Airdrie, AI
+Airdrie YMCA, AJ
+Albyn School, AN
+Alloa, AA
+Angus resident, NG
+Ardrossan, AR
+Argyll and Bute resident, AG
+Arran, AZ
+Austin Friars, AF
+Ayr, AY
+Ayrshire resident, AS
+Badgers Brook, BX
+Balerno, BN
+Balwearie, BW
+Banchory PS, BC
+Banff, BF
+Bank of Scotland, BS
+Bankton, BK
+Bearsden, BD
+Bell Baxter, BL
+Bellshill, BH
+Benarty, BY
+Berwick, BE
+Bishopbriggs, BB
+Bishopton, BI
+Blairgowrie, BG
+Bon Accord, BA
+Bonaly PS, BO
+Borders resident, BZ
+Boroughmuir, BR
+Bothwell PS, L6
+Brechin, B2
+Broughton High School, B1
+Bruntsfield, BT
+Buckstone, BU
+Burnside PS Rutherglen, L2
+Cairneyhill, CI
+Cambuslang, CZ
+Canongate, CG
+Cardinal Newman, L9
+Cargilfield, C1
+Carluke, CU
+Carrick, CK
+Carse of Gowrie, CA
+Castlehill, CH
+Castlemilk, CM
+Cathcart, CC
+Clackmannanshire, CL
+Club Unknown, ZZ
+Coatbridge, CT
+Concord, CD
+Corsehill, CR
+Corstorphine, CO
+Corstorphine Primary, CY
+Crieff, CF
+Crowwood, CW
+Cumbernauld, CN
+Cupar, CP
+D.N.A., DN
+Dalbeattie, DT
+Dalmuir, DA
+Dalry Primary School, DY
+Deans White Ed, DS
+Dollar Academy, DX
+Dumfries, DF
+Dunbar, DR
+Dunbartonshire resident, DM
+Dunblane, DB
+Dundee, DV
+Dundee High, DH
+Dundee Resident, DD
+Dundee University, DU
+Dunfermline, DL
+Duns, DZ
+East Kilbride, EK
+Edinburgh, ED
+Edinburgh Academy, EC
+Edinburgh Chess Academy, EA
+Edinburgh Civil Service, CS
+Edinburgh resident, ER
+Edinburgh St Peter's, ES
+Edinburgh University, EU
+Edinburgh West, EW
+EK Schools, EH
+Elgin, EL
+England, EN
+Falkirk, FA
+Fernhill, FN
+Fife, FI
+Fife Schools, FS
+Flora Stevenson PS, E2
+Forfar, FO
+Forthill, FH
+France, FR
+Galashiels, GS
+George Heriot's, GH
+George Watson's College, E6
+Georgetown PS, G1
+Giffnock, GI
+Girvan, GV
+Glasgow Academy, GA
+Glasgow Caledonian Univ, GC
+Glasgow Montrose, GM
+Glasgow Polytechnic, PY
+Glasgow resident, GW
+Glasgow University, GU
+Glenrothes, GN
+Glenrothes Schools, GJ
+Golspie, GP
+Gordonstoun, GO
+Gorgie Dalry, GY
+Grangemouth, GR
+Greenwood, GD
+Hamilton, HA
+Hamilton College, HC
+Hawick, HK
+Hazlehead PS, HZ
+Helensburgh, HE
+Heriot Watt, HW
+High School of Glasgow, G2
+Highlands & Islands resident, HS
+Hillside Primary, HI
+Holy Cross HS, HX
+Houston, HO
+Hutchison Glasgow, HU
+Inverclyde, IC
+Inverness, IV
+Ireland, IL
+Irvine, IR
+James Young, JY
+JMS Gillespie, JG
+JMS Gillespie Primary, J2
+John Ogilvie HS Hamilton, JN
+Jordanhill School, JO
+Juniper Green PS, JP
+Kelso, KO
+Kemnay, KE
+Kilmarnock, KM
+Kilwinning, KW
+Kinnoull, KX
+Kinross, KR
+Kinross High, KH
+Kirkcaldy, KC
+Kirkcudbright, KB
+Kirkhill Primary School, KL
+Kirkintilloch, KK
+Kirkland High School, K2
+Kirriemuir, KI
+Knightswood, KN
+Lanark, LK
+Lanarkshire resident, LL
+Lanarkshire School, LH
+Largs, LG
+Larkhall, LA
+Lasswade, LS
+Lawhead, LD
+Laxdale School, AL
+Lenzie, LZ
+Leven, LE
+Lewis, LX
+Liberton Primary, LB
+Linlithgow Academy, LI
+Linlithgow Primary, LP
+Livingston, LV
+Lochgilphead, LC
+London, LN
+Lothian Juniors, LJ
+Lothians resident, LR
+Louden Academy, LO
+Low Port PS, W3
+Macaulay Institute, MC
+Maccabi, MB
+Madras College, MD
+Maryhill, MA
+Mearns Chess, MN
+Mile End, ME
+Milngavie, MI
+Monifieth, MF
+Moray resident, MO
+Morrison's Academy, MS
+Motherwell, MW
+Muiredge PS, MG
+Musselburgh, MU
+Nairn, NA
+Napier University, NP
+Netherlands, NE
+Newmachar, NM
+Newport Knights, NK
+Newton Stewart, NS
+NHS Borders, NB
+Nicolson Inst, NL
+Nigel Short Chess Society, FC
+Ninewells, NW
+Non Resident, NR
+North Juniors, NJ
+Oban, OB
+Old Meldrum, OM
+Orkney, OK
+Outside UK, XK
+Paisley, PA
+Parsons, PS
+Pecten, PC
+Peebles, PB
+Pentland Hills, PH
+Pentland Juniors, PJ
+Pentland Primary School, P2
+Perth, PR
+Perth Academy, P1
+Perth High, PE
+Perth Kinross resident, PK
+Peterhead, PT
+Phones, PO
+Portobello, PL
+Prestonfield PS, E3
+Prestwick, PW
+Quarryhill, QH
+Queens Park, QP
+RAF Leuchars, RL
+Renfrew, RE
+Renfrewshire, RS
+Renfrewshire resident, RN
+Riccarton, RC
+Robert Gordons, RG
+Rowett Inst, RW
+Royal High School, RH
+Rutherglen, RU
+Salsburgh, SL
+Sandy Bells, SB
+Sciennes PS, SN
+Scottish Provident, SO
+Scottish Widows, SS
+Selkirk, SK
+Shetland, S1
+Shettleston, SH
+Skye, SY
+South Morningside, SR
+St Aloysius College, G3
+St Andrews, SA
+St Anthonys PS Rutherglen, L5
+St Brides PS Bothwell, SI
+St Cuthberts PS Burnbank, L3
+St George's School, GG
+St Gerards, SG
+St John the Baptist PS, L8
+St John's Barrhead, J1
+St Josephs PS Blantyre, SJ
+St Marks Hamilton, MR
+St Marys PS Hamilton, L7
+St Ninian's, NI
+St Thomas of Aquins, AQ
+St Vincent's EK, SV
+Standard Life, SF
+Stepps, SP
+Stewart Mel, SM
+Stewarton, SW
+Stirling, ST
+Stirling University, SU
+Stonehaven, SZ
+Stonelaw HS Rutherglen, L1
+Strathclyde University, SC
+Tiger Cubs, TC
+Tillicoultry, TI
+Tinto Primary School, T1
+Torphins, TP
+Towerbank PS, E4
+Trinity HS Rutherglen, TY
+Troon, TR
+Tulloch, TU
+Uddingston Grammar, UD
+Underbank Primary, UN
+Wales, WL
+Wandering Dragons, WD
+Websters High School, WE
+West Coats PS, WC
+West Kilbride, WK
+Wester Hailes, WH
+Wick, WI
+Wigtown County, WG
+Wishaw, WS
