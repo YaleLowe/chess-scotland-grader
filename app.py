@@ -26,15 +26,52 @@ if "player_cache" not in st.session_state:
     st.session_state.player_cache = {}
 if "active_names" not in st.session_state:
     st.session_state.active_names = []
+if "search_history" not in st.session_state:
+    st.session_state.search_history = []
+if "history_index" not in st.session_state:
+    st.session_state.history_index = -1
+if "current_search_query" not in st.session_state:
+    st.session_state.current_search_query = ""
 
 st.title("♟️ Chess Scotland Grading Lookup")
 st.markdown("Enter a list of player names below to retrieve their grading information.")
 
 # --- 1. Top: Input Section ---
+
+# History Navigation
+hist_col1, hist_col2, _ = st.columns([1, 1, 8])
+
+def on_prev():
+    if st.session_state.history_index > 0:
+        st.session_state.history_index -= 1
+        st.session_state.current_search_query = st.session_state.search_history[st.session_state.history_index]
+
+def on_next():
+    if st.session_state.history_index < len(st.session_state.search_history) - 1:
+        st.session_state.history_index += 1
+        st.session_state.current_search_query = st.session_state.search_history[st.session_state.history_index]
+
+def update_history():
+    query = st.session_state.current_search_query.strip()
+    if query:
+        # Remove existing entry if present (to move to top)
+        if query in st.session_state.search_history:
+            st.session_state.search_history.remove(query)
+            
+        st.session_state.search_history.append(query)
+        st.session_state.history_index = len(st.session_state.search_history) - 1
+
+with hist_col1:
+    st.button("◀️ Previous", on_click=on_prev, disabled=(st.session_state.history_index <= 0))
+    
+with hist_col2:
+    st.button("Next ▶️", on_click=on_next, disabled=(st.session_state.history_index >= len(st.session_state.search_history) - 1))
+
 names_input = st.text_area(
-    "Player Names (one per line)\nOptional: Add comma to filter by club (e.g. 'Nathanael Loch, ST')", 
+    "Player Names (one per line)\nFormat: 'Name [PNUM]' or 'Name; Club'", 
     height=150, 
-    placeholder="e.g.\nNathanael Loch\nnat loc\nst (for just members of club stirling)"
+    placeholder="e.g.\nNathanael Loch\nSmith, John [12345] (Grading ignored)\n; ST (for just members of club stirling)",
+    key="current_search_query"
 )
 
 # --- 2. Middle: Options (Landscape) ---
@@ -65,7 +102,7 @@ with opt_col4:
     show_blitz_live = st.checkbox("Live (Blitz)", value=False)
 
 # --- Action ---
-if st.button("Get Grading", type="primary"):
+if st.button("Get Grading", type="primary", on_click=update_history):
     if not names_input.strip():
         st.warning("Please enter at least one name.")
         st.session_state.active_names = []
@@ -82,21 +119,47 @@ if st.button("Get Grading", type="primary"):
             line = line.strip()
             if not line: continue
             
-            parts = line.split(',', 1)
-            name_part = parts[0].strip()
-            club_part = parts[1].strip() if len(parts) > 1 else ""
+            # 1. PNUM Extraction: Look for [12345]
+            import re
+            pnum_match = re.search(r'\[(\d+)\]', line)
             
-            # Allow empty name IF club part exists (e.g. ", Stirling")
-            if not name_part and not club_part: continue
-            
-            is_single = len(name_part.split()) == 1 if name_part else False
-            
-            parsed_queries.append({
-                'raw': line,
-                'name': name_part,
-                'club': club_part,
-                'is_single': is_single
-            })
+            if pnum_match:
+                # PNUM Found: Extract and ignore everything else
+                pnum = pnum_match.group(1)
+                parsed_queries.append({
+                    'raw': line,
+                    'pnum': pnum,
+                    'name': '',
+                    'club': '',
+                    'is_single': False # Not relevant for pnum search
+                })
+            else:
+                # 2. Club Parsing: Split by '; ' (semicolon)
+                parts = line.split(';', 1)
+                name_part = parts[0].strip()
+                club_part = parts[1].strip() if len(parts) > 1 else ""
+                
+                # 3. Name Normalization and Cleanup
+                # Remove (...) grading info
+                name_part = re.sub(r'\(.*?\)', '', name_part).strip()
+                
+                # Handle "Surname, Forename" -> "Forename Surname"
+                if ',' in name_part:
+                    n_parts = name_part.split(',', 1)
+                    if len(n_parts) == 2:
+                        name_part = f"{n_parts[1].strip()} {n_parts[0].strip()}"
+                
+                # Allow empty name IF club part exists (e.g. "; Stirling")
+                if not name_part and not club_part: continue
+                
+                is_single = len(name_part.split()) == 1 if name_part else False
+                
+                parsed_queries.append({
+                    'raw': line,
+                    'name': name_part,
+                    'club': club_part,
+                    'is_single': is_single
+                })
             valid_raw_lines.append(line)
         
         if not parsed_queries:
@@ -113,6 +176,13 @@ if st.button("Get Grading", type="primary"):
             if missing_queries:
                 with st.spinner(f"Fetching data for {len(missing_queries)} new players..."):
                     new_results = get_player_grading(missing_queries)
+                    
+                    # Mark results as from PNUM search if applicable, for UI warning
+                    for query in missing_queries:
+                         if query.get('pnum') and query['raw'] in new_results:
+                              for match in new_results[query['raw']]:
+                                   match['is_pnum_only_match'] = True
+
                     st.session_state.player_cache.update(new_results)
             
             # Update active set to trigger display
@@ -169,14 +239,23 @@ if st.session_state.active_names:
                 
                 # Determine match status
                 status_icon = "✅"
-                if len(matches) > 1:
+                if matches[0].get('is_pnum_only_match'): # Check if this result came from a PNUM-only search
+                     status_icon = "⚠️ PNUM Only"
+                elif len(matches) > 1:
                     status_icon = "⚠️ Multiple"
 
                 # Format Club: Code (Full Name)
-                c_code = row.get('club', '')
-                c_display = c_code
-                if c_code in CLUB_MAP:
-                     c_display = f"{c_code} ({CLUB_MAP[c_code]})"
+                c_code_raw = row.get('club', '')
+                c_parts = [c.strip() for c in c_code_raw.split(',') if c.strip()]
+                c_display_parts = []
+                
+                for code in c_parts:
+                    if code in CLUB_MAP:
+                        c_display_parts.append(f"{code} ({CLUB_MAP[code]})")
+                    else:
+                        c_display_parts.append(code)
+                
+                c_display = ", ".join(c_display_parts)
 
                 display_row = {
                     "Match Status": status_icon,
@@ -212,7 +291,10 @@ if st.session_state.active_names:
         if key in unique_data:
             existing = unique_data[key]
             # Replace existing if current is ✅ and existing is NOT
-            if "✅" in row['Match Status'] and "✅" not in existing['Match Status']:
+            current_is_valid = "✅" in row['Match Status'] or "⚠️ PNUM Only" in row['Match Status']
+            existing_is_valid = "✅" in existing['Match Status'] or "⚠️ PNUM Only" in existing['Match Status']
+            
+            if current_is_valid and not existing_is_valid:
                  unique_data[key] = row
             # Else keep existing (or overwriting doesn't matter if both same)
         else:
@@ -228,7 +310,7 @@ if st.session_state.active_names:
     
     for row in unique_data.values():
         count_possible += 1
-        if "✅" in row['Match Status']:
+        if "✅" in row['Match Status'] or "⚠️ PNUM Only" in row['Match Status']:
             count_exact += 1
             
     # count_none tracks invalid queries from the loop, but we also have placeholders in flat_data
@@ -368,7 +450,7 @@ if st.session_state.active_names:
             st.code(multiline_text, language="text")
             
         with c2:
-            st.markdown("##### Single Line Copy (Sorted)")
+            st.markdown("##### Single Line Copy")
             # Single line sorted alphabetically by name (text)
             alpha_sorted_lines = sorted([str(item['text']) for item in copy_items])
             singleline_text = ", ".join(alpha_sorted_lines) 

@@ -35,7 +35,7 @@ def get_session_and_token():
         
     return session, token_input['value']
 
-def search_player(session, csrf_token, forename, surname, club=""):
+def search_player(session, csrf_token, forename, surname, club="", pnum=""):
     """
     Sends the specific XHR request to the handle-form endpoint.
     """
@@ -53,7 +53,7 @@ def search_player(session, csrf_token, forename, surname, club=""):
         'action': (None, 'search_players'),
         'forename': (None, forename),
         'surname': (None, surname),
-        'pnum': (None, ''),
+        'pnum': (None, pnum),
         'gender': (None, ''),
         'club': (None, club),
         'fide_fed': (None, ''),
@@ -290,60 +290,68 @@ def get_player_grading(queries):
         club_raw = query.get('club', '')
         is_single = query.get('is_single', False)
         
-        # Resolve Club Code
-        club_code = ""
-        # Check 1: Explicit club part
-        if club_raw:
-            club_code = get_club_code(club_raw)
-        
-        # Check 2: Implicit Club Code (if name is just 2 chars and no club specified)
-        # "ST" -> name="ST", club="" -> Treat as Club Code "ST", Name=""
-        if not club_code and is_single and len(name_part) == 2:
-             club_code = name_part.upper()
-             name_part = "" # Clear name to avoid searching for "ST" player
-
-        # --- Name Length Constraint ---
-        # Rule: Name must be >= 3 chars, UNLESS name is empty (Pure Club Search)
         matches = []
         is_invalid = False
         
-        if name_part and len(name_part) < 3:
-            # Name too short
-            is_invalid = True
+        if query.get('pnum'):
+             # Case 0: PNUM Search - PNUM found, ignore name/club
+             html = search_player(session, csrf_token, forename="", surname="", club="", pnum=query['pnum'])
+             matches = parse_results(html)
         else:
-            # Execute Search
+            # Resolve Club Code
+            club_code = ""
+            # Check 1: Explicit club part
+            if club_raw:
+                club_code = get_club_code(club_raw)
             
-            # Case A: Club Search Only (Name is empty)
-            if not name_part and club_code:
-                 # Search for all players in club? checking if backend supports empty name
-                 # Based on form, usually requires at least one field. Club is a field.
-                 html = search_player(session, csrf_token, forename="", surname="", club=club_code)
-                 matches = parse_results(html)
+            # Check 2: Implicit Club Code (if name is just 2 chars and no club specified)
+            # "ST" -> name="ST", club="" -> Treat as Club Code "ST", Name=""
+            if not club_code and is_single and len(name_part) == 2:
+                 club_code = name_part.upper()
+                 name_part = "" # Clear name to avoid searching for "ST" player
+
+            # --- Name Length Constraint ---
+            # Rule: Name must be >= 3 chars, UNLESS name is empty (Pure Club Search)
+            matches = []
+            is_invalid = False
             
-            # Case B: Standard Name Search
-            elif name_part:
-                if is_single:
-                    # Smart Search: Try Forename then Surname
-                    html_1 = search_player(session, csrf_token, forename=name_part, surname="", club=club_code)
-                    res_1 = parse_results(html_1) 
-                    
-                    html_2 = search_player(session, csrf_token, forename="", surname=name_part, club=club_code)
-                    res_2 = parse_results(html_2)
-                    
-                    # Merge and Dedup
-                    seen_pnums = set()
-                    for p in res_1 + res_2:
-                        if p['pnum'] not in seen_pnums:
-                            matches.append(p)
-                            seen_pnums.add(p['pnum'])
-                else:
-                    # Standard Search
-                    parts = name_part.strip().split()
-                    lname = parts[-1]
-                    fname = " ".join(parts[:-1])
-                    
-                    html_response = search_player(session, csrf_token, fname, lname, club=club_code)
-                    matches = parse_results(html_response, surname_filter=lname)
+            if name_part and len(name_part) < 3:
+                # Name too short
+                is_invalid = True
+            else:
+                # Execute Search
+                
+                # Case A: Club Search Only (Name is empty)
+                if not name_part and club_code:
+                     # Search for all players in club? checking if backend supports empty name
+                     # Based on form, usually requires at least one field. Club is a field.
+                     html = search_player(session, csrf_token, forename="", surname="", club=club_code)
+                     matches = parse_results(html)
+                
+                # Case B: Standard Name Search
+                elif name_part:
+                    if is_single:
+                        # Smart Search: Try Forename then Surname
+                        html_1 = search_player(session, csrf_token, forename=name_part, surname="", club=club_code)
+                        res_1 = parse_results(html_1) 
+                        
+                        html_2 = search_player(session, csrf_token, forename="", surname=name_part, club=club_code)
+                        res_2 = parse_results(html_2)
+                        
+                        # Merge and Dedup
+                        seen_pnums = set()
+                        for p in res_1 + res_2:
+                            if p['pnum'] not in seen_pnums:
+                                matches.append(p)
+                                seen_pnums.add(p['pnum'])
+                    else:
+                        # Standard Search
+                        parts = name_part.strip().split()
+                        lname = parts[-1]
+                        fname = " ".join(parts[:-1])
+                        
+                        html_response = search_player(session, csrf_token, fname, lname, club=club_code)
+                        matches = parse_results(html_response, surname_filter=lname)
 
         if is_invalid:
              # Add a special marker for invalid query
