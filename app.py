@@ -1,6 +1,9 @@
+import html
+import json
 from datetime import date
 
 import streamlit as st
+import streamlit.components.v1 as components
 import pandas as pd
 from chess_grading import get_player_grading, get_clubs_list, parse_queries, clean_input_text
 
@@ -379,6 +382,14 @@ if st.session_state.active_names:
                 return full_name
             return f"{parts[0][0]}. {parts[-1]}"
 
+        def _split_name(full_name):
+            parts = full_name.strip().split()
+            if not parts:
+                return "", ""
+            if len(parts) == 1:
+                return "", parts[0]
+            return " ".join(parts[:-1]), parts[-1]
+
         player_data = {}
         valid_player_ids = []
         for row in unique_data.values():
@@ -390,6 +401,7 @@ if st.session_state.active_names:
                 if len(n_parts) == 2:
                     normalised = f"{n_parts[1].strip()} {n_parts[0].strip()}"
             abbrev = _abbreviate(normalised)
+            forename, surname = _split_name(normalised)
 
             grade = ""
             grade_int = -1
@@ -412,7 +424,15 @@ if st.session_state.active_names:
             display = " ".join(label_parts)
 
             player_id = pnum or normalised
-            player_data[player_id] = {'display': display, 'rating': grade_int}
+            player_data[player_id] = {
+                'display': display,
+                'rating': grade_int,
+                'rating_str': grade,
+                'forename': forename,
+                'surname': surname,
+                'full_name': normalised,
+                'pnum': pnum,
+            }
             valid_player_ids.append(player_id)
 
         # Reset team rosters when the underlying player set changes (by id).
@@ -486,3 +506,246 @@ if st.session_state.active_names:
                 _render_team("Away", "away_team_name",
                              "away_players", "away_captain",
                              "home_players", "home_captain")
+
+        # --- Build printable scoresheet HTML ---
+        def _cell(text):
+            return html.escape(str(text)) if text else ""
+
+        def _full_name(pid):
+            d = player_data.get(pid, {})
+            return f"{d.get('forename', '')} {d.get('surname', '')}".strip()
+
+        home_ids = st.session_state.home_players
+        away_ids = st.session_state.away_players
+        n_boards = max(len(home_ids), len(away_ids), 1)
+
+        rows_html = []
+        for i in range(n_boards):
+            h = player_data.get(home_ids[i], {}) if i < len(home_ids) else {}
+            a = player_data.get(away_ids[i], {}) if i < len(away_ids) else {}
+            rows_html.append(f"""
+                <tr>
+                    <td class="bd">{i + 1}</td>
+                    <td>{_cell(h.get('forename'))}</td>
+                    <td>{_cell(h.get('surname'))}</td>
+                    <td>{_cell(h.get('pnum'))}</td>
+                    <td>{_cell(h.get('rating_str'))}</td>
+                    <td></td>
+                    <td class="result-cell">-</td>
+                    <td></td>
+                    <td>{_cell(a.get('forename'))}</td>
+                    <td>{_cell(a.get('surname'))}</td>
+                    <td>{_cell(a.get('pnum'))}</td>
+                    <td>{_cell(a.get('rating_str'))}</td>
+                </tr>
+            """)
+
+        match_date = st.session_state.match_date
+        date_str = match_date.strftime("%d %B %Y") if match_date else ""
+
+        scoresheet_html = f"""<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Chess Scoresheet</title>
+<style>
+    @page {{ size: A4 landscape; margin: 1cm; }}
+    body {{
+        font-family: Arial, Helvetica, sans-serif;
+        margin: 0;
+        padding: 0.5cm;
+        color: #000;
+    }}
+    .header {{
+        display: flex;
+        justify-content: space-between;
+        align-items: baseline;
+        margin-bottom: 0.3em;
+    }}
+    .title {{ font-size: 1.6em; font-weight: bold; }}
+    .meta {{ display: flex; gap: 2em; font-size: 1em; }}
+    .meta-label {{ font-weight: bold; margin-right: 0.4em; }}
+    .meta-value {{
+        display: inline-block;
+        min-width: 9em;
+        border-bottom: 1px solid #000;
+        padding: 0 0.4em;
+    }}
+    .divider {{
+        border-top: 3px solid #000;
+        margin: 0.3em 0 0.4em 0;
+    }}
+    table.score {{
+        width: 100%;
+        border-collapse: collapse;
+        margin-top: 0.2em;
+    }}
+    table.score th, table.score td {{
+        border: 1px solid #000;
+        padding: 0.4em 0.3em;
+        text-align: center;
+        font-size: 0.95em;
+        height: 1.6em;
+    }}
+    table.score th {{ background: #e8e8e8; font-size: 0.85em; }}
+    .bd {{ background: #f4f4f4; font-weight: bold; width: 2em; }}
+    .result-cell {{ font-weight: bold; }}
+    .team-row td {{
+        border: none !important;
+        padding: 0.3em 0.2em 0.5em 0.2em !important;
+        text-align: left !important;
+        background: transparent !important;
+        font-size: 1.1em;
+        font-weight: bold;
+    }}
+    .team-label {{ color: #555; font-weight: normal; margin-right: 0.4em; }}
+    .team-value {{
+        display: inline-block;
+        border-bottom: 1px solid #000;
+        padding: 0 0.4em;
+        min-width: 12em;
+    }}
+    .total-wrap {{
+        display: flex;
+        margin-top: -1px;
+    }}
+    .total-spacer-l {{ flex: 0 0 auto; }}
+    .total-cell {{
+        border: 1px solid #000;
+        border-top: none;
+        padding: 0.4em;
+        text-align: left;
+        font-weight: bold;
+        background: #f4f4f4;
+    }}
+    .total-spacer-r {{ flex: 1; }}
+    .signatures {{
+        display: flex;
+        justify-content: space-between;
+        gap: 2em;
+        margin-top: 1em;
+    }}
+    .sig-block {{ flex: 1; }}
+    .sig-row {{
+        display: flex;
+        align-items: baseline;
+        margin-bottom: 0.6em;
+    }}
+    .sig-label {{
+        font-weight: bold;
+        min-width: 9em;
+    }}
+    .sig-line {{
+        flex: 1;
+        border-bottom: 1px solid #000;
+        height: 1.4em;
+        padding-left: 0.4em;
+    }}
+    @media print {{
+        body {{ padding: 0; }}
+    }}
+</style>
+</head>
+<body>
+    <div class="header">
+        <div class="title">Chess Scoresheet</div>
+        <div class="meta">
+            <div><span class="meta-label">Date:</span><span class="meta-value">{html.escape(date_str)}</span></div>
+            <div><span class="meta-label">Venue:</span><span class="meta-value">{html.escape(st.session_state.venue or '')}</span></div>
+        </div>
+    </div>
+    <div class="divider"></div>
+    <table class="score">
+        <thead>
+            <tr class="team-row">
+                <td colspan="7">
+                    <span class="team-label">Home:</span>
+                    <span class="team-value">{html.escape(st.session_state.home_team_name or '')}</span>
+                </td>
+                <td colspan="5">
+                    <span class="team-label">Away:</span>
+                    <span class="team-value">{html.escape(st.session_state.away_team_name or '')}</span>
+                </td>
+            </tr>
+            <tr>
+                <th>BD</th>
+                <th>Forename</th><th>Surname</th><th>PNUM</th><th>Rating</th>
+                <th>w/b</th><th>Result</th><th>w/b</th>
+                <th>Forename</th><th>Surname</th><th>PNUM</th><th>Rating</th>
+            </tr>
+        </thead>
+        <tbody>
+            {''.join(rows_html)}
+            <tr>
+                <td colspan="6" style="border:none"></td>
+                <td class="result-cell" style="background:#f4f4f4;height:2em">-</td>
+                <td colspan="5" style="border:none"></td>
+            </tr>
+        </tbody>
+    </table>
+    <div class="signatures">
+        <div class="sig-block">
+            <div class="sig-row">
+                <span class="sig-label">Home Captain:</span>
+                <span class="sig-line">{html.escape(_full_name(st.session_state.home_captain))}</span>
+            </div>
+            <div class="sig-row">
+                <span class="sig-label">Signature:</span>
+                <span class="sig-line">&nbsp;</span>
+            </div>
+        </div>
+        <div class="sig-block">
+            <div class="sig-row">
+                <span class="sig-label">Away Captain:</span>
+                <span class="sig-line">{html.escape(_full_name(st.session_state.away_captain))}</span>
+            </div>
+            <div class="sig-row">
+                <span class="sig-label">Signature:</span>
+                <span class="sig-line">&nbsp;</span>
+            </div>
+        </div>
+    </div>
+</body>
+</html>"""
+
+        # --- Print button (opens scoresheet in new tab and triggers print) ---
+        st.write("")
+        components.html(f"""
+<style>
+    .print-btn {{
+        background: #ff4b4b;
+        color: white;
+        border: none;
+        padding: 0.55rem 1.5rem;
+        border-radius: 0.4rem;
+        cursor: pointer;
+        font-size: 1rem;
+        font-weight: 500;
+        font-family: 'Source Sans Pro', sans-serif;
+    }}
+    .print-btn:hover {{ background: #ff6b6b; }}
+    .hint {{
+        color: #666;
+        font-size: 0.85rem;
+        margin-top: 0.4rem;
+        font-family: 'Source Sans Pro', sans-serif;
+    }}
+</style>
+<button class="print-btn" onclick="openPrintWindow()">🖨️ Print Scoresheet</button>
+<div class="hint">Opens the scoresheet in a new tab with the print dialog. Choose your printer or "Save as PDF".</div>
+<script>
+    function openPrintWindow() {{
+        var sheet = {json.dumps(scoresheet_html)};
+        var w = window.open('', '_blank');
+        if (!w) {{
+            alert('Pop-up blocked. Please allow pop-ups for this site and try again.');
+            return;
+        }}
+        w.document.open();
+        w.document.write(sheet);
+        w.document.close();
+        w.focus();
+        setTimeout(function() {{ w.print(); }}, 350);
+    }}
+</script>
+""", height=110)
