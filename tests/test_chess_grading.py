@@ -15,6 +15,9 @@ from chess_grading import (
     get_club_code,
     get_clubs_list,
     get_player_grading,
+    parse_queries,
+    clean_input_text,
+    _clean_name,
 )
 
 
@@ -227,17 +230,20 @@ class TestGetPlayerGrading:
             assert match.get('match_type') == 'pnum'
 
     @patch('chess_grading.get_session_and_token')
-    def test_multiword_name_splits_to_forename_surname(self, mock_init):
+    def test_multiword_name_tries_all_permutations(self, mock_init):
         mock_session = self._make_session_mock()
         mock_init.return_value = (mock_session, 'fake_token')
 
         queries = [{'raw': 'nat loc', 'name': 'nat loc', 'club': '', 'is_single': False}]
         get_player_grading(queries)
 
-        call_kwargs = mock_session.post.call_args
-        payload = call_kwargs[1]['files']
-        assert payload['forename'] == (None, 'nat')
-        assert payload['surname'] == (None, 'loc')
+        # Should make 2 calls: (forename=loc, surname=nat) and (forename=nat, surname=loc)
+        assert mock_session.post.call_count == 2
+        payloads = [call[1]['files'] for call in mock_session.post.call_args_list]
+        forenames = {p['forename'][1] for p in payloads}
+        surnames = {p['surname'][1] for p in payloads}
+        assert forenames == {'nat', 'loc'}
+        assert surnames == {'nat', 'loc'}
 
     @patch('chess_grading.get_session_and_token')
     def test_single_token_makes_two_requests(self, mock_init):
@@ -279,3 +285,163 @@ class TestGetPlayerGrading:
         result = get_player_grading(queries)
 
         assert result == {}
+
+
+# ---------------------------------------------------------------------------
+# _clean_name
+# ---------------------------------------------------------------------------
+
+class TestCleanName:
+    def test_strips_parenthesised_content(self):
+        assert _clean_name("John Smith (1513)") == "John Smith"
+
+    def test_strips_leading_numbers_and_period(self):
+        assert _clean_name("1. John Smith") == "John Smith"
+
+    def test_strips_all_numbers_outside_brackets(self):
+        assert _clean_name("3 John Smith 42") == "John Smith"
+
+    def test_normalises_surname_forename(self):
+        assert _clean_name("Smith, John") == "John Smith"
+
+    def test_removes_commas_and_special_chars(self):
+        assert _clean_name("John! Smith@") == "John Smith"
+
+    def test_preserves_hyphens_and_apostrophes(self):
+        assert _clean_name("O'Brien-Smith") == "O'Brien-Smith"
+
+    def test_collapses_whitespace(self):
+        assert _clean_name("  John   Smith  ") == "John Smith"
+
+    def test_complex_example(self):
+        assert _clean_name("1. Smith, John (1513)") == "John Smith"
+
+    def test_empty_string(self):
+        assert _clean_name("") == ""
+
+
+# ---------------------------------------------------------------------------
+# parse_queries
+# ---------------------------------------------------------------------------
+
+class TestParseQueries:
+    def test_simple_name(self):
+        queries, lines = parse_queries("John Smith")
+        assert len(queries) == 1
+        assert queries[0]['name'] == "John Smith"
+        assert queries[0]['club'] == ""
+
+    def test_pnum_in_brackets(self):
+        queries, lines = parse_queries("[12345]")
+        assert len(queries) == 1
+        assert queries[0]['pnum'] == "12345"
+
+    def test_pnum_with_name(self):
+        queries, lines = parse_queries("John Smith [12345]")
+        assert queries[0]['pnum'] == "12345"
+
+    def test_semicolon_club(self):
+        queries, lines = parse_queries("John Smith; st")
+        assert queries[0]['name'] == "John Smith"
+        assert queries[0]['club'] == "st"
+
+    def test_colon_sets_sticky_club(self):
+        queries, lines = parse_queries("st:\nJohn Smith\nJane Doe")
+        assert len(queries) == 2
+        assert queries[0]['club'] == "st"
+        assert queries[1]['club'] == "st"
+
+    def test_colon_override(self):
+        queries, lines = parse_queries("st:\nJohn Smith\ngr:\nJane Doe")
+        assert queries[0]['club'] == "st"
+        assert queries[1]['club'] == "gr"
+
+    def test_colon_with_name_on_same_line(self):
+        queries, lines = parse_queries("st: John Smith")
+        assert len(queries) == 1
+        assert queries[0]['name'] == "John Smith"
+        assert queries[0]['club'] == "st"
+
+    def test_semicolon_overrides_sticky(self):
+        queries, lines = parse_queries("st:\nJohn Smith; gr")
+        assert queries[0]['club'] == "gr"
+
+    def test_dirty_input_cleaned(self):
+        queries, lines = parse_queries("1. John Smith (1513)")
+        assert queries[0]['name'] == "John Smith"
+
+    def test_empty_lines_skipped(self):
+        queries, lines = parse_queries("\n\nJohn Smith\n\n")
+        assert len(queries) == 1
+
+    def test_club_only_search_with_semicolon(self):
+        queries, lines = parse_queries("; ST")
+        assert len(queries) == 1
+        assert queries[0]['name'] == ""
+        assert queries[0]['club'] == "ST"
+
+    def test_is_single_flag(self):
+        queries, _ = parse_queries("Loch")
+        assert queries[0]['is_single'] is True
+        queries2, _ = parse_queries("John Smith")
+        assert queries2[0]['is_single'] is False
+
+    def test_colon_directive_not_in_valid_lines(self):
+        queries, lines = parse_queries("st:\nJohn Smith")
+        assert len(lines) == 1
+        assert lines[0] == "John Smith"
+
+    def test_sticky_club_applies_to_pnum(self):
+        queries, _ = parse_queries("st:\n[12345]")
+        assert queries[0]['pnum'] == "12345"
+        assert queries[0]['club'] == "st"
+
+    def test_multiple_colon_groups(self):
+        text = "st:\nAlice\nBob\ngr:\nCharlie\nDave"
+        queries, _ = parse_queries(text)
+        assert len(queries) == 4
+        assert queries[0]['club'] == "st"
+        assert queries[1]['club'] == "st"
+        assert queries[2]['club'] == "gr"
+        assert queries[3]['club'] == "gr"
+
+
+# ---------------------------------------------------------------------------
+# clean_input_text
+# ---------------------------------------------------------------------------
+
+class TestCleanInputText:
+    def test_strips_leading_number_and_rating(self):
+        assert clean_input_text("1. Nathanael Loch (1513)") == "Nathanael Loch"
+
+    def test_normalises_surname_forename(self):
+        assert clean_input_text("Smith, John") == "John Smith"
+
+    def test_preserves_colon_directive(self):
+        assert clean_input_text("st:") == "st:"
+
+    def test_preserves_colon_with_name(self):
+        assert clean_input_text("st: 1. John Smith (1513)") == "st: John Smith"
+
+    def test_preserves_semicolon_club(self):
+        assert clean_input_text("John Smith; st") == "John Smith; st"
+
+    def test_preserves_pnum_brackets(self):
+        assert clean_input_text("[12345]") == "[12345]"
+
+    def test_strips_name_from_pnum_line(self):
+        # PNUM lines keep only the bracket
+        assert clean_input_text("John Smith [12345]") == "[12345]"
+
+    def test_multiline_cleaning(self):
+        raw = "st:\n1. John Smith (1513)\n2. Jane Doe (900)"
+        expected = "st:\nJohn Smith\nJane Doe"
+        assert clean_input_text(raw) == expected
+
+    def test_empty_lines_removed(self):
+        assert clean_input_text("\n\nJohn Smith\n\n") == "John Smith"
+
+    def test_complex_mixed_input(self):
+        raw = "st:\n1. Smith, John (1513)\n[12345]\ngr:\nJane Doe; ed"
+        expected = "st:\nJohn Smith\n[12345]\ngr:\nJane Doe; ed"
+        assert clean_input_text(raw) == expected

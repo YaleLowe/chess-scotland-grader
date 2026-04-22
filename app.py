@@ -1,8 +1,8 @@
-import re
+from datetime import date
 
 import streamlit as st
 import pandas as pd
-from chess_grading import get_player_grading, get_clubs_list
+from chess_grading import get_player_grading, get_clubs_list, parse_queries, clean_input_text
 
 st.set_page_config(
     page_title="Chess Scotland Grading Lookup",
@@ -34,6 +34,24 @@ if "history_index" not in st.session_state:
     st.session_state.history_index = -1
 if "current_search_query" not in st.session_state:
     st.session_state.current_search_query = ""
+if "home_team_name" not in st.session_state:
+    st.session_state.home_team_name = "Team 1"
+if "away_team_name" not in st.session_state:
+    st.session_state.away_team_name = "Team 2"
+if "home_players" not in st.session_state:
+    st.session_state.home_players = []
+if "away_players" not in st.session_state:
+    st.session_state.away_players = []
+if "home_captain" not in st.session_state:
+    st.session_state.home_captain = None
+if "away_captain" not in st.session_state:
+    st.session_state.away_captain = None
+if "teams_signature" not in st.session_state:
+    st.session_state.teams_signature = None
+if "venue" not in st.session_state:
+    st.session_state.venue = ""
+if "match_date" not in st.session_state:
+    st.session_state.match_date = date.today()
 
 st.title("♟️ Chess Scotland Grading Lookup")
 st.markdown("Enter a list of player names below to retrieve their grading information.")
@@ -59,9 +77,13 @@ def on_next():
 def update_history():
     query = st.session_state.current_search_query.strip()
     if query:
-        if query in st.session_state.search_history:
-            st.session_state.search_history.remove(query)
-        st.session_state.search_history.append(query)
+        # Clean the input and write it back to the text area
+        cleaned = clean_input_text(query)
+        st.session_state.current_search_query = cleaned
+
+        if cleaned in st.session_state.search_history:
+            st.session_state.search_history.remove(cleaned)
+        st.session_state.search_history.append(cleaned)
         st.session_state.history_index = len(st.session_state.search_history) - 1
 
 
@@ -72,9 +94,9 @@ with hist_col2:
     st.button("Next ▶️", on_click=on_next, disabled=(st.session_state.history_index >= len(st.session_state.search_history) - 1))
 
 names_input = st.text_area(
-    "Player Names (one per line)\nFormat: 'Name [PNUM]' or 'Name; Club'",
+    "Player Names (one per line)\nFormat: 'Name [PNUM]' or 'Name; Club' or 'Club:' for group",
     height=150,
-    placeholder="e.g.\nNathanael Loch\nSmith, John [12345] (Grading ignored)\n; ST (for just members of club stirling)",
+    placeholder="e.g.\nNathanael Loch\nSmith, John [12345]\n; ST (club-only search)\nst:\nPlayer One\nPlayer Two\ngr:\nPlayer Three",
     key="current_search_query"
 )
 
@@ -110,53 +132,7 @@ if st.button("Get Grading", type="primary", on_click=update_history):
         st.warning("Please enter at least one name.")
         st.session_state.active_names = []
     else:
-        raw_lines = names_input.split('\n')
-
-        parsed_queries = []
-        valid_raw_lines = []
-
-        for line in raw_lines:
-            line = line.strip()
-            if not line:
-                continue
-
-            pnum_match = re.search(r'\[(\d+)\]', line)
-
-            if pnum_match:
-                pnum = pnum_match.group(1)
-                parsed_queries.append({
-                    'raw': line,
-                    'pnum': pnum,
-                    'name': '',
-                    'club': '',
-                    'is_single': False,
-                })
-            else:
-                parts = line.split(';', 1)
-                name_part = parts[0].strip()
-                club_part = parts[1].strip() if len(parts) > 1 else ""
-
-                # Strip existing grading info in parentheses
-                name_part = re.sub(r'\(.*?\)', '', name_part).strip()
-
-                # Normalise "Surname, Forename" -> "Forename Surname"
-                if ',' in name_part:
-                    n_parts = name_part.split(',', 1)
-                    if len(n_parts) == 2:
-                        name_part = f"{n_parts[1].strip()} {n_parts[0].strip()}"
-
-                if not name_part and not club_part:
-                    continue
-
-                is_single = len(name_part.split()) == 1 if name_part else False
-
-                parsed_queries.append({
-                    'raw': line,
-                    'name': name_part,
-                    'club': club_part,
-                    'is_single': is_single,
-                })
-            valid_raw_lines.append(line)
+        parsed_queries, valid_raw_lines = parse_queries(names_input)
 
         if not parsed_queries:
             st.warning("No valid names found.")
@@ -389,3 +365,124 @@ if st.session_state.active_names:
             alpha_sorted = sorted(copy_items, key=lambda x: x['name'].lower())
             singleline_text = ", ".join(item['text'] for item in alpha_sorted)
             st.code(singleline_text, language="text")
+
+        # --- Scoresheet Maker ---
+        st.divider()
+        st.subheader("Scoresheet Maker")
+
+        # Build per-player metadata (display string + numeric rating for sorting).
+        # Keyed by stable id (pnum, falling back to name) so checkbox toggles
+        # don't reset the user's team assignments / order / captains.
+        def _abbreviate(full_name):
+            parts = full_name.strip().split()
+            if len(parts) < 2:
+                return full_name
+            return f"{parts[0][0]}. {parts[-1]}"
+
+        player_data = {}
+        valid_player_ids = []
+        for row in unique_data.values():
+            raw_name = row.get('Name', '') or ''
+            pnum = str(row.get('Pnum', '') or '')
+            normalised = raw_name
+            if ',' in raw_name:
+                n_parts = raw_name.split(',', 1)
+                if len(n_parts) == 2:
+                    normalised = f"{n_parts[1].strip()} {n_parts[0].strip()}"
+            abbrev = _abbreviate(normalised)
+
+            grade = ""
+            grade_int = -1
+            for key, is_checked in priority_list:
+                if is_checked:
+                    raw_val = row.get(flat_key_map[key], '')
+                    if raw_val and str(raw_val).strip():
+                        grade = str(raw_val).strip()
+                        try:
+                            grade_int = int(grade)
+                        except ValueError:
+                            pass
+                        break
+
+            label_parts = [abbrev]
+            if pnum:
+                label_parts.append(f"[{pnum}]")
+            if grade:
+                label_parts.append(f"({grade})")
+            display = " ".join(label_parts)
+
+            player_id = pnum or normalised
+            player_data[player_id] = {'display': display, 'rating': grade_int}
+            valid_player_ids.append(player_id)
+
+        # Reset team rosters when the underlying player set changes (by id).
+        sig = tuple(valid_player_ids)
+        if st.session_state.teams_signature != sig:
+            mid = (len(valid_player_ids) + 1) // 2
+            st.session_state.home_players = valid_player_ids[:mid]
+            st.session_state.away_players = valid_player_ids[mid:]
+            st.session_state.home_captain = None
+            st.session_state.away_captain = None
+            st.session_state.teams_signature = sig
+
+        v_col, d_col = st.columns([3, 1])
+        with v_col:
+            st.text_input("Venue", key="venue", placeholder="e.g. Stirling Chess Club")
+        with d_col:
+            st.date_input("Date", key="match_date")
+
+        def _render_team(side, name_key, players_key, captain_key,
+                         other_players_key, other_captain_key):
+            name_col, sort_col = st.columns([6, 1])
+            with name_col:
+                st.text_input(f"{side} Team Name", key=name_key,
+                              label_visibility="collapsed")
+            with sort_col:
+                if st.button("🔽", key=f"sort_{side}",
+                             help="Sort by rating (highest first)",
+                             use_container_width=True):
+                    st.session_state[players_key].sort(
+                        key=lambda pid: player_data.get(pid, {}).get('rating', -1),
+                        reverse=True,
+                    )
+                    st.rerun()
+
+            players = st.session_state[players_key]
+            for idx, pid in enumerate(list(players)):
+                star_col, name_col, up_col = st.columns([1, 6, 1])
+                is_captain = st.session_state[captain_key] == pid
+                star_icon = "⭐" if is_captain else "☆"
+                label = player_data.get(pid, {}).get('display', pid)
+                if star_col.button(star_icon, key=f"cap_{side}_{pid}",
+                                   help="Set as captain"):
+                    st.session_state[captain_key] = None if is_captain else pid
+                    st.rerun()
+                if name_col.button(label, key=f"name_{side}_{pid}",
+                                   use_container_width=True,
+                                   help="Move to other team"):
+                    players.remove(pid)
+                    st.session_state[other_players_key].append(pid)
+                    if st.session_state[captain_key] == pid:
+                        st.session_state[captain_key] = None
+                    st.rerun()
+                if up_col.button("⬆️", key=f"up_{side}_{pid}",
+                                 help="Move up one board (wraps to bottom)"):
+                    if idx == 0:
+                        players.append(players.pop(0))
+                    else:
+                        players[idx - 1], players[idx] = players[idx], players[idx - 1]
+                    st.rerun()
+
+        home_col, away_col = st.columns(2)
+        with home_col:
+            with st.container(border=True):
+                st.caption("Home")
+                _render_team("Home", "home_team_name",
+                             "home_players", "home_captain",
+                             "away_players", "away_captain")
+        with away_col:
+            with st.container(border=True):
+                st.caption("Away")
+                _render_team("Away", "away_team_name",
+                             "away_players", "away_captain",
+                             "home_players", "home_captain")

@@ -2,6 +2,24 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2026-04-22]
+
+### Added
+- **Scoresheet Maker**: New section below the copy boxes for setting up a Home vs Away match scoresheet. Includes editable team names (default `Team 1` / `Team 2`), a venue field, and a date field defaulting to today.
+- **Team rosters**: Players from the current search are auto-split into Home (first half) and Away (second half). Each player row has three controls:
+  - **Star (`☆` / `⭐`)** — set or clear team captain.
+  - **Name button** — click to move the player to the other team.
+  - **Up arrow (`⬆️`)** — move the player up one board, wrapping to the bottom from the top.
+- **Sort by rating**: A `🔽` button at the top-right of each team box sorts that team's players by the currently-displayed rating (highest first).
+- **Compact player labels**: Players in the team boxes are shown as `N. Loch [30187] (1515)` — first initial of the first forename, surname, PNUM in brackets, and the highest-priority visible rating in parens. Saves space on mobile.
+- **Stable team identity**: Team membership, order, and captain are keyed by PNUM internally, so toggling rating checkboxes updates labels but does not reset the user's team setup.
+- **`parse_queries`**: Moved from `app.py` into `chess_grading.py` and extended with sticky-club colon syntax (`st:` applies club `ST` to all following lines until overridden) and per-line semicolon overrides (`Name; club`).
+- **`clean_input_text`**: Cleans the raw text-area input for display — strips parenthesised content, stray numbers, periods, and disallowed characters while preserving structural syntax (colons, semicolons, square brackets) and normalising `Surname, Forename` to `Forename Surname`.
+
+### Improved
+- **Multi-word name search**: Now tries each word as the surname (with the remainder as forename), catching both `John Smith` and `Smith John` style entries instead of always assuming the last token is the surname.
+- **Tests**: Expanded `tests/test_chess_grading.py` to cover `parse_queries`, `clean_input_text`, and the multi-word search behaviour.
+
 ## [2026-03-09]
 
 ### Added

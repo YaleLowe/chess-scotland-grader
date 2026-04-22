@@ -1,3 +1,5 @@
+import re
+
 import requests
 from bs4 import BeautifulSoup
 import json
@@ -225,6 +227,168 @@ def get_club_code(query):
     return ""
 
 
+def _clean_name(text):
+    """
+    Cleans a raw name string:
+    - Strips parenthesised content (e.g. "(1513)")
+    - Removes standalone numbers (e.g. leading "1.")
+    - Removes all characters except letters, spaces, hyphens, and apostrophes
+    - Normalises "Surname, Forename" -> "Forename Surname"
+    - Collapses whitespace
+    """
+    # Remove parenthesised content
+    text = re.sub(r'\(.*?\)', '', text)
+    # Remove numbers (not inside square brackets — those are already extracted)
+    text = re.sub(r'\d+', '', text)
+    # Remove periods
+    text = text.replace('.', '')
+    # Normalise "Surname, Forename" before stripping commas
+    if ',' in text:
+        parts = text.split(',', 1)
+        if len(parts) == 2 and parts[0].strip() and parts[1].strip():
+            text = f"{parts[1].strip()} {parts[0].strip()}"
+    # Remove all characters except letters, spaces, hyphens, apostrophes
+    text = re.sub(r"[^a-zA-Z\s'\-]", '', text)
+    # Collapse whitespace
+    text = ' '.join(text.split())
+    return text
+
+
+def parse_queries(raw_text):
+    """
+    Parses the multi-line text input into a list of query dicts.
+
+    Syntax per line:
+      - Raw text is a player name.
+      - [12345]        — PNUM search (square brackets).
+      - Name; club     — semicolon sets club for this line only.
+      - club:          — colon sets a "sticky" club for all following lines.
+      - gr: Name       — colon with text after it sets sticky club AND parses the name.
+
+    A new colon overrides the previous sticky club.
+
+    Returns (parsed_queries, valid_raw_lines).
+    """
+    raw_lines = raw_text.split('\n')
+    parsed_queries = []
+    valid_raw_lines = []
+    sticky_club = ""
+
+    for line in raw_lines:
+        line = line.strip()
+        if not line:
+            continue
+
+        # --- Colon handling: sticky club directive ---
+        if ':' in line:
+            colon_idx = line.index(':')
+            club_directive = line[:colon_idx].strip()
+            remainder = line[colon_idx + 1:].strip()
+            if club_directive:
+                sticky_club = club_directive
+            if not remainder:
+                # Pure directive line (e.g. "st:"), no query to add
+                continue
+            # Remainder becomes the line to parse
+            line = remainder
+
+        # --- PNUM detection (square brackets) ---
+        pnum_match = re.search(r'\[(\d+)\]', line)
+
+        if pnum_match:
+            pnum = pnum_match.group(1)
+            parsed_queries.append({
+                'raw': line,
+                'pnum': pnum,
+                'name': '',
+                'club': sticky_club,
+                'is_single': False,
+            })
+            valid_raw_lines.append(line)
+            continue
+
+        # --- Semicolon: per-line club override ---
+        parts = line.split(';', 1)
+        name_raw = parts[0].strip()
+        club_part = parts[1].strip() if len(parts) > 1 else ""
+
+        # Clean the name
+        name_part = _clean_name(name_raw)
+
+        # Determine effective club: explicit semicolon > sticky
+        effective_club = club_part if club_part else sticky_club
+
+        if not name_part and not effective_club:
+            continue
+
+        is_single = len(name_part.split()) == 1 if name_part else False
+
+        parsed_queries.append({
+            'raw': line,
+            'name': name_part,
+            'club': effective_club,
+            'is_single': is_single,
+        })
+        valid_raw_lines.append(line)
+
+    return parsed_queries, valid_raw_lines
+
+
+def clean_input_text(raw_text):
+    """
+    Cleans raw multi-line input for display back in the text box.
+    Preserves structural syntax (colons, semicolons, square brackets)
+    while cleaning name portions using _clean_name.
+
+    Returns the cleaned string with one entry per line.
+    """
+    raw_lines = raw_text.split('\n')
+    cleaned_lines = []
+
+    for line in raw_lines:
+        line = line.strip()
+        if not line:
+            continue
+
+        # Colon directive lines: keep as-is (e.g. "st:")
+        if ':' in line:
+            colon_idx = line.index(':')
+            club_directive = line[:colon_idx].strip()
+            remainder = line[colon_idx + 1:].strip()
+            if not remainder:
+                # Pure directive — keep it unchanged
+                cleaned_lines.append(f"{club_directive}:")
+                continue
+            # Has a name after colon — clean the name part, reconstruct
+            pnum_match = re.search(r'\[(\d+)\]', remainder)
+            if pnum_match:
+                cleaned_lines.append(f"{club_directive}: [{pnum_match.group(1)}]")
+                continue
+            parts = remainder.split(';', 1)
+            name_clean = _clean_name(parts[0])
+            club_suffix = f"; {parts[1].strip()}" if len(parts) > 1 else ""
+            rebuilt = f"{club_directive}: {name_clean}{club_suffix}".strip()
+            cleaned_lines.append(rebuilt)
+            continue
+
+        # PNUM line — keep only the bracket portion
+        pnum_match = re.search(r'\[(\d+)\]', line)
+        if pnum_match:
+            cleaned_lines.append(f"[{pnum_match.group(1)}]")
+            continue
+
+        # Regular name line, possibly with semicolon club
+        parts = line.split(';', 1)
+        name_clean = _clean_name(parts[0])
+        club_suffix = f"; {parts[1].strip()}" if len(parts) > 1 else ""
+
+        result = f"{name_clean}{club_suffix}".strip()
+        if result:
+            cleaned_lines.append(result)
+
+    return '\n'.join(cleaned_lines)
+
+
 def get_player_grading(queries):
     """
     Main API function. Fetches grading for a list of query dicts.
@@ -300,13 +464,18 @@ def get_player_grading(queries):
                                 matches.append(p)
                                 seen_pnums.add(p['pnum'])
                     else:
-                        # Multi-word: last token = surname, everything else = forename.
-                        # The backend handles all partial matching natively.
-                        parts = name_part.strip().split()
-                        lname = parts[-1]
-                        fname = " ".join(parts[:-1])
-                        html_response = search_player(session, csrf_token, fname, lname, club=club_code)
-                        matches = parse_results(html_response)
+                        # Multi-word: try each word as surname with the rest as forename.
+                        # This catches both "John Smith" and "Smith John" style entries.
+                        words = name_part.strip().split()
+                        seen_pnums = set()
+                        for i in range(len(words)):
+                            surname = words[i]
+                            forename = " ".join(words[:i] + words[i+1:])
+                            html_response = search_player(session, csrf_token, forename, surname, club=club_code)
+                            for p in parse_results(html_response):
+                                if p['pnum'] not in seen_pnums:
+                                    matches.append(p)
+                                    seen_pnums.add(p['pnum'])
 
                     for m in matches:
                         m['match_type'] = 'name'
