@@ -55,6 +55,10 @@ if "venue" not in st.session_state:
     st.session_state.venue = ""
 if "match_date" not in st.session_state:
     st.session_state.match_date = date.today()
+if "tournament_type" not in st.session_state:
+    st.session_state.tournament_type = "Standard"
+if "blank_counter" not in st.session_state:
+    st.session_state.blank_counter = 0
 
 st.title("♟️ Chess Scotland Grading Lookup")
 st.markdown("Enter a list of player names below to retrieve their grading information.")
@@ -373,6 +377,14 @@ if st.session_state.active_names:
         st.divider()
         st.subheader("Scoresheet Maker")
 
+        TOURNAMENT_TYPES = ["Standard", "All Play All Allegro"]
+        st.selectbox(
+            "Tournament Type",
+            options=TOURNAMENT_TYPES,
+            key="tournament_type",
+        )
+        tournament_type = st.session_state.tournament_type
+
         # Build per-player metadata (display string + numeric rating for sorting).
         # Keyed by stable id (pnum, falling back to name) so checkbox toggles
         # don't reset the user's team assignments / order / captains.
@@ -436,14 +448,34 @@ if st.session_state.active_names:
             valid_player_ids.append(player_id)
 
         # Reset team rosters when the underlying player set changes (by id).
+        # Blank rows added by the user persist across resets — only real players
+        # are re-split.
         sig = tuple(valid_player_ids)
         if st.session_state.teams_signature != sig:
+            home_blanks = [pid for pid in st.session_state.home_players
+                           if str(pid).startswith("__blank_")]
+            away_blanks = [pid for pid in st.session_state.away_players
+                           if str(pid).startswith("__blank_")]
             mid = (len(valid_player_ids) + 1) // 2
-            st.session_state.home_players = valid_player_ids[:mid]
-            st.session_state.away_players = valid_player_ids[mid:]
+            st.session_state.home_players = valid_player_ids[:mid] + home_blanks
+            st.session_state.away_players = valid_player_ids[mid:] + away_blanks
             st.session_state.home_captain = None
             st.session_state.away_captain = None
             st.session_state.teams_signature = sig
+
+        # Register blank rows in player_data so rendering and HTML generation
+        # can look them up like real players.
+        for pid in set(st.session_state.home_players + st.session_state.away_players):
+            if str(pid).startswith("__blank_") and pid not in player_data:
+                player_data[pid] = {
+                    'display': '(blank)',
+                    'rating': -1,
+                    'rating_str': '',
+                    'forename': '',
+                    'surname': '',
+                    'full_name': '',
+                    'pnum': '',
+                }
 
         v_col, d_col = st.columns([3, 1])
         with v_col:
@@ -469,22 +501,32 @@ if st.session_state.active_names:
 
             players = st.session_state[players_key]
             for idx, pid in enumerate(list(players)):
+                is_blank = str(pid).startswith("__blank_")
                 star_col, name_col, up_col = st.columns([1, 6, 1])
-                is_captain = st.session_state[captain_key] == pid
-                star_icon = "⭐" if is_captain else "☆"
-                label = player_data.get(pid, {}).get('display', pid)
-                if star_col.button(star_icon, key=f"cap_{side}_{pid}",
-                                   help="Set as captain"):
-                    st.session_state[captain_key] = None if is_captain else pid
-                    st.rerun()
-                if name_col.button(label, key=f"name_{side}_{pid}",
-                                   use_container_width=True,
-                                   help="Move to other team"):
-                    players.remove(pid)
-                    st.session_state[other_players_key].append(pid)
-                    if st.session_state[captain_key] == pid:
-                        st.session_state[captain_key] = None
-                    st.rerun()
+                if is_blank:
+                    star_col.markdown("&nbsp;", unsafe_allow_html=True)
+                    if name_col.button("✕  (blank — fill in on the day)",
+                                       key=f"name_{side}_{pid}",
+                                       use_container_width=True,
+                                       help="Remove this blank row"):
+                        players.remove(pid)
+                        st.rerun()
+                else:
+                    is_captain = st.session_state[captain_key] == pid
+                    star_icon = "⭐" if is_captain else "☆"
+                    label = player_data.get(pid, {}).get('display', pid)
+                    if star_col.button(star_icon, key=f"cap_{side}_{pid}",
+                                       help="Set as captain"):
+                        st.session_state[captain_key] = None if is_captain else pid
+                        st.rerun()
+                    if name_col.button(label, key=f"name_{side}_{pid}",
+                                       use_container_width=True,
+                                       help="Move to other team"):
+                        players.remove(pid)
+                        st.session_state[other_players_key].append(pid)
+                        if st.session_state[captain_key] == pid:
+                            st.session_state[captain_key] = None
+                        st.rerun()
                 if up_col.button("⬆️", key=f"up_{side}_{pid}",
                                  help="Move up one board (wraps to bottom)"):
                     if idx == 0:
@@ -492,6 +534,13 @@ if st.session_state.active_names:
                     else:
                         players[idx - 1], players[idx] = players[idx], players[idx - 1]
                     st.rerun()
+
+            if st.button("➕ Add Blank Player", key=f"add_blank_{side}",
+                         use_container_width=True,
+                         help="Add a blank row for a player to be filled in later"):
+                st.session_state.blank_counter += 1
+                players.append(f"__blank_{st.session_state.blank_counter}")
+                st.rerun()
 
         home_col, away_col = st.columns(2)
         with home_col:
@@ -515,30 +564,113 @@ if st.session_state.active_names:
             d = player_data.get(pid, {})
             return f"{d.get('forename', '')} {d.get('surname', '')}".strip()
 
-        home_ids = st.session_state.home_players
-        away_ids = st.session_state.away_players
+        home_ids = list(st.session_state.home_players)
+        away_ids = list(st.session_state.away_players)
         n_boards = max(len(home_ids), len(away_ids), 1)
+        h_padded = home_ids + [None] * (n_boards - len(home_ids))
+        a_padded = away_ids + [None] * (n_boards - len(away_ids))
 
-        rows_html = []
-        for i in range(n_boards):
-            h = player_data.get(home_ids[i], {}) if i < len(home_ids) else {}
-            a = player_data.get(away_ids[i], {}) if i < len(away_ids) else {}
-            rows_html.append(f"""
-                <tr>
-                    <td class="bd">{i + 1}</td>
-                    <td>{_cell(h.get('forename'))}</td>
-                    <td>{_cell(h.get('surname'))}</td>
-                    <td>{_cell(h.get('pnum'))}</td>
-                    <td>{_cell(h.get('rating_str'))}</td>
-                    <td></td>
-                    <td class="result-cell">-</td>
-                    <td></td>
-                    <td>{_cell(a.get('forename'))}</td>
-                    <td>{_cell(a.get('surname'))}</td>
-                    <td>{_cell(a.get('pnum'))}</td>
-                    <td>{_cell(a.get('rating_str'))}</td>
-                </tr>
-            """)
+        is_all_play_all = tournament_type == "All Play All Allegro"
+        n_rounds = n_boards if is_all_play_all else 1
+        title_text = f"Chess Scoresheet: {tournament_type}"
+
+        teams_header_html = f"""
+        <div class="teams-header">
+            <div class="team team-home">
+                <span class="team-label">Home:</span>
+                <span class="team-value">{html.escape(st.session_state.home_team_name or '')}</span>
+            </div>
+            <div class="team team-away">
+                <span class="team-label">Away:</span>
+                <span class="team-value">{html.escape(st.session_state.away_team_name or '')}</span>
+            </div>
+        </div>
+        """
+
+        column_header_html = """
+            <tr>
+                <th>BD</th>
+                <th>Forename</th><th>Surname</th><th>PNUM</th><th>Rating</th>
+                <th>w/b</th><th>Result</th><th>w/b</th>
+                <th>Forename</th><th>Surname</th><th>PNUM</th><th>Rating</th>
+            </tr>
+        """
+
+        def _build_round_html(round_idx, round_label, append_final_score):
+            # All Play All: away has White in round 1, alternating every round.
+            # Home is always the opposite. Standard scoresheet leaves w/b blank.
+            if is_all_play_all:
+                away_colour = "W" if round_idx % 2 == 0 else "B"
+                home_colour = "B" if round_idx % 2 == 0 else "W"
+            else:
+                away_colour = ""
+                home_colour = ""
+
+            rows = []
+            for b in range(n_boards):
+                if is_all_play_all:
+                    h_pid = h_padded[(b - round_idx) % n_boards]
+                else:
+                    h_pid = h_padded[b]
+                a_pid = a_padded[b]
+                h = player_data.get(h_pid, {}) if h_pid else {}
+                a = player_data.get(a_pid, {}) if a_pid else {}
+                rows.append(f"""
+                    <tr>
+                        <td class="bd">{b + 1}</td>
+                        <td>{_cell(h.get('forename'))}</td>
+                        <td>{_cell(h.get('surname'))}</td>
+                        <td>{_cell(h.get('pnum'))}</td>
+                        <td>{_cell(h.get('rating_str'))}</td>
+                        <td>{home_colour}</td>
+                        <td class="result-cell">-</td>
+                        <td>{away_colour}</td>
+                        <td>{_cell(a.get('forename'))}</td>
+                        <td>{_cell(a.get('surname'))}</td>
+                        <td>{_cell(a.get('pnum'))}</td>
+                        <td>{_cell(a.get('rating_str'))}</td>
+                    </tr>
+                """)
+            heading = f'<h2 class="round-title">{html.escape(round_label)}</h2>' if round_label else ""
+            final_score_row = ""
+            if append_final_score:
+                # Sits inside the same table so the cell aligns under the
+                # round-total cell above it (and the per-board result cells).
+                final_score_row = """
+                    <tr class="final-score-row">
+                        <td colspan="6" class="final-score-label-cell">Final Score</td>
+                        <td class="final-score-cell">&nbsp;</td>
+                        <td colspan="5" style="border:none"></td>
+                    </tr>
+                """
+            return f"""
+            <div class="round-block">
+                {heading}
+                <table class="score">
+                    <thead>
+                        {column_header_html}
+                    </thead>
+                    <tbody>
+                        {''.join(rows)}
+                        <tr>
+                            <td colspan="6" style="border:none"></td>
+                            <td class="result-cell" style="background:#f4f4f4;height:2em">-</td>
+                            <td colspan="5" style="border:none"></td>
+                        </tr>
+                        {final_score_row}
+                    </tbody>
+                </table>
+            </div>
+            """
+
+        if is_all_play_all:
+            rounds_html = "".join(
+                _build_round_html(r, f"Round {r + 1}",
+                                  append_final_score=(r == n_rounds - 1))
+                for r in range(n_rounds)
+            )
+        else:
+            rounds_html = _build_round_html(0, None, append_final_score=True)
 
         match_date = st.session_state.match_date
         date_str = match_date.strftime("%d %B %Y") if match_date else ""
@@ -547,7 +679,7 @@ if st.session_state.active_names:
 <html>
 <head>
 <meta charset="utf-8">
-<title>Chess Scoresheet</title>
+<title>{html.escape(title_text)}</title>
 <style>
     @page {{ size: A4 landscape; margin: 1cm; }}
     body {{
@@ -590,20 +722,43 @@ if st.session_state.active_names:
     table.score th {{ background: #e8e8e8; font-size: 0.85em; }}
     .bd {{ background: #f4f4f4; font-weight: bold; width: 2em; }}
     .result-cell {{ font-weight: bold; }}
-    .team-row td {{
-        border: none !important;
-        padding: 0.3em 0.2em 0.5em 0.2em !important;
-        text-align: left !important;
-        background: transparent !important;
+    .round-block {{
+        page-break-inside: avoid;
+        margin-top: 0.6em;
+    }}
+    .round-title {{
+        font-size: 1.2em;
+        font-weight: bold;
+        margin: 0.4em 0 0.2em 0;
+    }}
+    .teams-header {{
+        display: flex;
+        margin: 0.4em 0 0.2em 0;
         font-size: 1.1em;
         font-weight: bold;
     }}
+    .teams-header .team {{ padding: 0 0.3em; }}
+    .teams-header .team-home {{ flex: 7; }}
+    .teams-header .team-away {{ flex: 5; }}
     .team-label {{ color: #555; font-weight: normal; margin-right: 0.4em; }}
     .team-value {{
         display: inline-block;
         border-bottom: 1px solid #000;
         padding: 0 0.4em;
         min-width: 12em;
+    }}
+    .final-score-row td {{
+        padding-top: 0.9em !important;
+    }}
+    .final-score-label-cell {{
+        border: none !important;
+        font-weight: bold;
+        text-align: right !important;
+        padding-right: 0.6em !important;
+    }}
+    .final-score-cell {{
+        background: #f4f4f4;
+        font-weight: bold;
     }}
     .total-wrap {{
         display: flex;
@@ -648,41 +803,15 @@ if st.session_state.active_names:
 </head>
 <body>
     <div class="header">
-        <div class="title">Chess Scoresheet</div>
+        <div class="title">{html.escape(title_text)}</div>
         <div class="meta">
             <div><span class="meta-label">Date:</span><span class="meta-value">{html.escape(date_str)}</span></div>
             <div><span class="meta-label">Venue:</span><span class="meta-value">{html.escape(st.session_state.venue or '')}</span></div>
         </div>
     </div>
     <div class="divider"></div>
-    <table class="score">
-        <thead>
-            <tr class="team-row">
-                <td colspan="7">
-                    <span class="team-label">Home:</span>
-                    <span class="team-value">{html.escape(st.session_state.home_team_name or '')}</span>
-                </td>
-                <td colspan="5">
-                    <span class="team-label">Away:</span>
-                    <span class="team-value">{html.escape(st.session_state.away_team_name or '')}</span>
-                </td>
-            </tr>
-            <tr>
-                <th>BD</th>
-                <th>Forename</th><th>Surname</th><th>PNUM</th><th>Rating</th>
-                <th>w/b</th><th>Result</th><th>w/b</th>
-                <th>Forename</th><th>Surname</th><th>PNUM</th><th>Rating</th>
-            </tr>
-        </thead>
-        <tbody>
-            {''.join(rows_html)}
-            <tr>
-                <td colspan="6" style="border:none"></td>
-                <td class="result-cell" style="background:#f4f4f4;height:2em">-</td>
-                <td colspan="5" style="border:none"></td>
-            </tr>
-        </tbody>
-    </table>
+    {teams_header_html}
+    {rounds_html}
     <div class="signatures">
         <div class="sig-block">
             <div class="sig-row">
