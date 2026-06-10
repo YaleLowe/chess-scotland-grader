@@ -2,6 +2,24 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2026-06-10]
+
+### Added
+- **Sheet Options**: New "Sheet Options" expander in the Scoresheet Maker with toggles for which fields are pre-filled on the printout — **PNUMs**, **Ratings**, and **Colours (w/b)**. Unticked fields are left blank for filling in by hand on the day. Colours apply to All Play All Allegro sheets only (Standard sheets always leave w/b blank).
+- **`scoresheet_pdf.py`**: New module that renders the scoresheet with `fpdf2`, plus a test suite (`tests/test_scoresheet_pdf.py`) covering layout fitting, page counts, blank rows, and non-latin-1 names.
+- **Board results entry**: Standard matches get a Result column between the two team boxes (one dropdown per board); All Play All gets a results grid below the teams with one column per round. Options are `1 - 0`, `0.5 - 0.5`, `0 - 1`, and defaults `1 - D` / `D - 1` / `D - D`. Defaults score per the league convention: a present player beats an absent one 1 - 0; a double default is scored as a 0.5 - 0.5 draw.
+- **Match Email generator (`match_email.py`)**: A new "Match Email" section below the PDF download renders a ready-to-copy results email in the club submission format (see `example_emails.md`): title line with final score, per-round result lines with `Name [pnum] (rating)` (or `(ung)` when unrated), round/cumulative scores, `Final score` after the last round, and `(absent)` markers beside defaulted players (named or not). Unentered results render as `_` to fill in. Covered by `tests/test_match_email.py`, including a full reconstruction of example 1.
+- **Final score check**: The final score auto-fills from the entered board results; the user can type one in instead, and the app warns when it doesn't add up against the board results (and reports how many results are still missing).
+- **Match link & QR code (`match_link.py`)**: The match setup (teams, players with PNUMs/ratings, board order, captains, venue, date, tournament type, sheet options, drawn colours) is compressed into the `?m=` query parameter of the app URL — no server-side storage, the link *is* the data. The scoresheet PDF prints this as a QR code beside the signatures: scanning the printed sheet with any phone camera reopens the app fully prefilled, ready for results entry. The same link is shown in a "Match link & QR code" expander for copying/bookmarking (and works on any host, e.g. localhost during development). A typical link is ~300 characters; corrupt or truncated links show a warning instead of crashing. Added `qrcode` to requirements and `tests/test_match_link.py`. The PDF signature block (and QR) now stays full size when the rest of the sheet shrinks to fit one page, so signatures stay writable and the QR stays scannable.
+- **Manual colour entry**: Standard matches get a w/b dropdown per board (home player's colour; away inferred as the opposite). For All Play All with auto colours unticked, each round column in the Results grid gets an "Away colour" dropdown matching how colours are drawn for a whole team per round (e.g. a WWBB draw). Entered colours feed both the PDF's w/b cells and the email — round headers (`Round 1 B/W:`) for All Play All, `(B)`/`(W)` after player names for Standard. Defaulted players show no colour.
+- **Date format option**: Sheet Options now has a date format selector — `2026 March 30` (default), `30 March 2026`, `30/03/2026`, `30/03/26` — applied to both the PDF scoresheet and the match email. (Previously the scoresheet was hardcoded to `30 March 2026`.)
+
+### Changed
+- **Scoresheet output is now a downloadable PDF**: The browser-print button (new tab + `window.print()`) is replaced by a "Download Scoresheet (PDF)" button that generates a deterministic A4 landscape PDF with `fpdf2`. Browser printing was the source of repeated platform quirks: mobile browsers ignore the landscape `@page` hint and split the sheet across pages, and Chromium's save-as-PDF clipped the rightmost table border when CSS scale transforms were involved. The generated PDF always fills the printable width exactly, shrinks the whole layout to keep multi-round All Play All sheets on one page where readable, and otherwise flows across pages breaking only between rounds (signature block kept together). Users print the PDF at 100% scale from any device.
+
+### Removed
+- **Stale review documents**: Deleted `CODE_REVIEW.md` and `FIX_PLAN.md` — working documents from the 2026-03-09 code review whose fixes have long been applied. Removed references to them from the readme and added `.pytest_cache/` to `.gitignore`.
+
 ## [2026-04-22]
 
 ### Added

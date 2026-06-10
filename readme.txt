@@ -132,23 +132,92 @@ The Sidebar (on the left) shows a full list of club names and their
 2-letter codes. You can use either form in any search field.
 
 ------------------------------------------------------------------------
-8. RUNNING TESTS
+8. SCORESHEET MAKER
+------------------------------------------------------------------------
+Below the copy section, the Scoresheet Maker turns your search results
+into a printable match scoresheet.
+
+  TOURNAMENT TYPE — "Standard" (one round) or "All Play All Allegro"
+                    (one round per board, with rotating pairings and
+                    alternating colours).
+
+  SHEET OPTIONS   — Choose which fields are pre-filled on the printout:
+                    PNUMs, Ratings, and Colours (w/b). Untick a field
+                    to leave it blank for filling in by hand on the day.
+
+  TEAMS           — Click a player's name to move them to the other
+                    team, the star to mark them as captain, and the
+                    arrow to move them up a board. Blank rows can be
+                    added for players to be named on the day.
+
+  PRINTING        — The Download button saves the sheet as an A4
+                    landscape PDF, ready to print at 100% scale from
+                    any device. The layout shrinks automatically so
+                    multi-round sheets fit on one page where possible;
+                    very large sheets flow onto extra pages with whole
+                    rounds kept together.
+
+  DATE FORMAT     — Sheet Options includes a date format choice (e.g.
+                    "2026 March 30" or "30/03/26") applied to both the
+                    PDF scoresheet and the match email.
+
+  RESULTS         — For Standard matches, enter each board's result in
+                    the column between the two team boxes. For All Play
+                    All, a results grid appears below the teams with one
+                    column per round. Options (home score first):
+                    1 - 0, 0.5 - 0.5, 0 - 1, plus defaults: "1 - D"
+                    (away player absent), "D - 1" (home player absent),
+                    "D - D" (both absent — scored as a draw). A present
+                    player beats an absent one by default.
+
+  COLOURS         — Standard matches have a w/b box per board (home
+                    player's colour; away gets the opposite). For All
+                    Play All with auto colours unticked, pick the colour
+                    drawn for the away team in each round's column —
+                    e.g. a WWBB draw means away plays White in rounds 1
+                    and 2 then Black. Entered colours appear on both the
+                    PDF scoresheet and in the match email.
+
+  MATCH LINK / QR — Every scoresheet PDF carries a QR code beside the
+                    signatures. Scanning it with any phone camera (or
+                    opening the link from the "Match link & QR code"
+                    expander) reopens the app with the whole match setup
+                    prefilled — teams, board order, captains, venue,
+                    date and options — ready for results entry after
+                    the match. The link itself contains the data; no
+                    account or upload is involved. Results and anything
+                    written on by hand are not included.
+
+  MATCH EMAIL     — Below the download button, a ready-to-copy results
+                    email is generated in the club submission format:
+                    a title line with the final score, round-by-round
+                    result lines, round and cumulative scores, and
+                    (absent) markers next to defaulted players. The
+                    final score auto-fills from the entered results;
+                    typing in a final score that does not match them
+                    triggers a warning. Unentered results appear as "_"
+                    for filling in before sending.
+
+------------------------------------------------------------------------
+9. RUNNING TESTS
 ------------------------------------------------------------------------
 A test suite is included. To run it (no internet connection required):
 
     pytest tests/
 
 ------------------------------------------------------------------------
-9. PROJECT FILES
+10. PROJECT FILES
 ------------------------------------------------------------------------
   app.py            — Streamlit UI
   chess_grading.py  — Chess Scotland API client and search logic
+  scoresheet_pdf.py — Scoresheet PDF generator (fpdf2)
+  match_email.py    — Match result email generator
+  match_link.py     — Match link encoding + QR code generation
+  example_emails.md — Real submission emails the template is based on
   club_names.txt    — Club name to code mapping
   requirements.txt  — Python dependencies
   tests/            — Automated test suite
   CHANGELOG.md      — Version history
-  CODE_REVIEW.md    — Code review notes
-  FIX_PLAN.md       — Fix plan derived from the code review
 
 ========================================================================
 Developed for Chess Scotland Users.

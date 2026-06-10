@@ -1,11 +1,20 @@
-import html
-import json
+import re
 from datetime import date
 
 import streamlit as st
-import streamlit.components.v1 as components
 import pandas as pd
 from chess_grading import get_player_grading, get_clubs_list, parse_queries, clean_input_text
+from scoresheet_pdf import build_scoresheet_pdf
+from match_email import (RESULT_OPTIONS, build_match_email, compute_totals,
+                         format_points)
+from match_link import build_match_url, decode_match, make_qr_image
+
+# Public URL the printed QR code points at. The ?m= payload itself works on
+# any host running the app (e.g. http://localhost:8501/?m=... when testing).
+APP_BASE_URL = "https://scotgrades.streamlit.app/"
+
+DATE_FORMAT_OPTIONS = ["2026 March 30", "30 March 2026", "30/03/2026",
+                       "30/03/26"]
 
 st.set_page_config(
     page_title="Chess Scotland Grading Lookup",
@@ -59,6 +68,90 @@ if "tournament_type" not in st.session_state:
     st.session_state.tournament_type = "Standard"
 if "blank_counter" not in st.session_state:
     st.session_state.blank_counter = 0
+
+
+# --- Match link prefill (?m= payload from the scoresheet QR code) ---
+def _grading_stub(name, pnum, rating):
+    """Synthesised cache entry for a player restored from a match link.
+
+    The link doesn't record which rating category the value came from, so
+    it is restored as the Standard published grade (the default column).
+    """
+    return {
+        'name': name, 'pnum': pnum, 'club': '', 'age': '',
+        'standard_published': rating, 'standard_live': '',
+        'allegro_published': '', 'allegro_live': '',
+        'blitz_published': '', 'blitz_live': '',
+        'match_type': 'name',
+    }
+
+
+def _apply_match_payload(p):
+    names = []
+    team_ids = {'hp': [], 'ap': []}
+    blank_n = 0
+    for key in ('hp', 'ap'):
+        for entry in p.get(key) or []:
+            if not entry:  # blank row on the sheet
+                blank_n += 1
+                team_ids[key].append(f"__blank_{blank_n}")
+                continue
+            name, pnum, rating = (list(entry) + ['', '', ''])[:3]
+            st.session_state.player_cache[name] = [
+                _grading_stub(name, pnum, rating)]
+            names.append(name)
+            team_ids[key].append(pnum or name)
+    st.session_state.blank_counter = blank_n
+    st.session_state.active_names = names
+    st.session_state.home_players = team_ids['hp']
+    st.session_state.away_players = team_ids['ap']
+    # Matches the signature the scoresheet section derives from the results,
+    # so the restored team split isn't reset by the auto-split logic.
+    st.session_state.teams_signature = tuple(
+        pid for pid in team_ids['hp'] + team_ids['ap']
+        if not str(pid).startswith("__blank_"))
+    st.session_state.home_captain = p.get('hc') or None
+    st.session_state.away_captain = p.get('ac') or None
+    st.session_state.home_team_name = p.get('hn') or "Team 1"
+    st.session_state.away_team_name = p.get('an') or "Team 2"
+    st.session_state.venue = p.get('vn', '')
+    if p.get('d'):
+        try:
+            st.session_state.match_date = date.fromisoformat(p['d'])
+        except ValueError:
+            pass
+    st.session_state.tournament_type = ("All Play All Allegro"
+                                        if p.get('t') == 'A' else "Standard")
+    opts = p.get('o') or [1, 1, 1]
+    st.session_state.sheet_fill_pnums = bool(opts[0])
+    st.session_state.sheet_fill_ratings = bool(opts[1])
+    st.session_state.sheet_fill_colours = bool(opts[2])
+    df_idx = p.get('df', 0)
+    if isinstance(df_idx, int) and 0 <= df_idx < len(DATE_FORMAT_OPTIONS):
+        st.session_state.date_format_choice = DATE_FORMAT_OPTIONS[df_idx]
+    for i, ch in enumerate(p.get('cr', '')):
+        if ch in "WB":
+            st.session_state[f"colour_r{i}"] = ch
+    for i, ch in enumerate(p.get('cb', '')):
+        if ch in "WB":
+            st.session_state[f"colour_r0_b{i}"] = ch
+
+
+_link_token = st.query_params.get("m")
+if _link_token and not st.session_state.get("match_link_loaded"):
+    st.session_state.match_link_loaded = True
+    try:
+        _link_payload = decode_match(_link_token)
+    except ValueError:
+        _link_payload = None
+    if isinstance(_link_payload, dict) and _link_payload.get('v') == 1:
+        _apply_match_payload(_link_payload)
+        st.success("Match setup loaded from the scoresheet link — scroll "
+                   "down to the Scoresheet Maker to enter results.")
+    else:
+        st.warning("This match link couldn't be read — it may be damaged "
+                   "or from a newer version of the app.")
+    st.query_params.clear()
 
 st.title("♟️ Chess Scotland Grading Lookup")
 st.markdown("Enter a list of player names below to retrieve their grading information.")
@@ -385,6 +478,38 @@ if st.session_state.active_names:
         )
         tournament_type = st.session_state.tournament_type
 
+        with st.expander("Sheet Options — pre-filled fields and date format"):
+            st.caption("Unticked fields are left blank on the printout, "
+                       "to be filled in by hand on the day.")
+            so_col1, so_col2, so_col3 = st.columns(3)
+            sheet_fill_pnums = so_col1.checkbox(
+                "PNUMs", value=True, key="sheet_fill_pnums")
+            sheet_fill_ratings = so_col2.checkbox(
+                "Ratings", value=True, key="sheet_fill_ratings")
+            sheet_fill_colours = so_col3.checkbox(
+                "Colours (w/b)", value=True, key="sheet_fill_colours",
+                help="All Play All: pre-fill alternating colours each round. "
+                     "Untick to enter the drawn colours per round in the "
+                     "Results section instead. Standard matches use the "
+                     "per-board colour boxes next to the results.")
+            df_col, _ = st.columns([1, 2])
+            date_format_choice = df_col.selectbox(
+                "Date format (scoresheet & email)",
+                DATE_FORMAT_OPTIONS,
+                key="date_format_choice",
+            )
+
+        def _format_match_date(d, style):
+            if d is None:
+                return ""
+            if style == "2026 March 30":
+                return f"{d.year} {d:%B} {d.day}"
+            if style == "30 March 2026":
+                return f"{d.day} {d:%B} {d.year}"
+            if style == "30/03/2026":
+                return d.strftime("%d/%m/%Y")
+            return d.strftime("%d/%m/%y")
+
         # Build per-player metadata (display string + numeric rating for sorting).
         # Keyed by stable id (pnum, falling back to name) so checkbox toggles
         # don't reset the user's team assignments / order / captains.
@@ -542,13 +667,47 @@ if st.session_state.active_names:
                 players.append(f"__blank_{st.session_state.blank_counter}")
                 st.rerun()
 
-        home_col, away_col = st.columns(2)
+        is_all_play_all = tournament_type == "All Play All Allegro"
+
+        _RESULT_HELP = ("Home score first. D = default (absent player): "
+                        "'D - 1' home player absent, '1 - D' away player "
+                        "absent, 'D - D' both absent (scored as a draw).")
+
+        # Standard matches get a Result column between the two team boxes,
+        # one box per board. All Play All results are entered per round below.
+        if is_all_play_all:
+            home_col, away_col = st.columns(2)
+            mid_col = None
+        else:
+            home_col, mid_col, away_col = st.columns([5, 3, 5])
+
         with home_col:
             with st.container(border=True):
                 st.caption("Home")
                 _render_team("Home", "home_team_name",
                              "home_players", "home_captain",
                              "away_players", "away_captain")
+        if mid_col is not None:
+            with mid_col:
+                with st.container(border=True):
+                    cap_c, cap_r = st.columns([1, 2])
+                    cap_c.caption("Home w/b")
+                    cap_r.caption("Result")
+                    st.markdown("&nbsp;", unsafe_allow_html=True)
+                    n_result_rows = max(len(st.session_state.home_players),
+                                        len(st.session_state.away_players), 1)
+                    for b in range(n_result_rows):
+                        c_col, r_col = st.columns([1, 2])
+                        c_col.selectbox(f"Board {b + 1} home colour",
+                                        ["", "W", "B"],
+                                        key=f"colour_r0_b{b}",
+                                        label_visibility="collapsed",
+                                        help="Home player's colour on this "
+                                             "board; away gets the opposite.")
+                        r_col.selectbox(f"Board {b + 1} result", RESULT_OPTIONS,
+                                        key=f"result_r0_b{b}",
+                                        label_visibility="collapsed",
+                                        help=_RESULT_HELP)
         with away_col:
             with st.container(border=True):
                 st.caption("Away")
@@ -556,10 +715,7 @@ if st.session_state.active_names:
                              "away_players", "away_captain",
                              "home_players", "home_captain")
 
-        # --- Build printable scoresheet HTML ---
-        def _cell(text):
-            return html.escape(str(text)) if text else ""
-
+        # --- Pairings (shared by results entry, the PDF, and the email) ---
         def _full_name(pid):
             d = player_data.get(pid, {})
             return f"{d.get('forename', '')} {d.get('surname', '')}".strip()
@@ -570,311 +726,246 @@ if st.session_state.active_names:
         h_padded = home_ids + [None] * (n_boards - len(home_ids))
         a_padded = away_ids + [None] * (n_boards - len(away_ids))
 
-        is_all_play_all = tournament_type == "All Play All Allegro"
         n_rounds = n_boards if is_all_play_all else 1
         title_text = f"Chess Scoresheet: {tournament_type}"
 
-        teams_header_html = f"""
-        <div class="teams-header">
-            <div class="team team-home">
-                <span class="team-label">Home:</span>
-                <span class="team-value">{html.escape(st.session_state.home_team_name or '')}</span>
-            </div>
-            <div class="team team-away">
-                <span class="team-label">Away:</span>
-                <span class="team-value">{html.escape(st.session_state.away_team_name or '')}</span>
-            </div>
-        </div>
-        """
+        _OPP_COLOUR = {"W": "B", "B": "W", "": ""}
 
-        column_header_html = """
-            <tr>
-                <th>BD</th>
-                <th>Forename</th><th>Surname</th><th>PNUM</th><th>Rating</th>
-                <th>w/b</th><th>Result</th><th>w/b</th>
-                <th>Forename</th><th>Surname</th><th>PNUM</th><th>Rating</th>
-            </tr>
-        """
+        def _round_colours(round_idx):
+            # All Play All round colours as (home, away). Auto: away has White
+            # in round 1, alternating every round. Manual (auto unticked): the
+            # colour drawn for the away team each round; home is the opposite.
+            if not is_all_play_all:
+                return ("", "")
+            if sheet_fill_colours:
+                return ("B", "W") if round_idx % 2 == 0 else ("W", "B")
+            away = st.session_state.get(f"colour_r{round_idx}", "")
+            return (_OPP_COLOUR[away], away)
 
-        def _build_round_html(round_idx, round_label, append_final_score):
-            # All Play All: away has White in round 1, alternating every round.
-            # Home is always the opposite. Standard scoresheet leaves w/b blank.
+        def _board_colours(round_idx, board_idx):
+            # Standard matches: colour entered per board (home player's
+            # colour; away gets the opposite). All Play All: round-level.
             if is_all_play_all:
-                away_colour = "W" if round_idx % 2 == 0 else "B"
-                home_colour = "B" if round_idx % 2 == 0 else "W"
-            else:
-                away_colour = ""
-                home_colour = ""
+                return _round_colours(round_idx)
+            home = st.session_state.get(f"colour_r0_b{board_idx}", "")
+            return (home, _OPP_COLOUR[home])
 
-            rows = []
+        def _pairings_for_round(round_idx):
+            pairs = []
             for b in range(n_boards):
                 if is_all_play_all:
                     h_pid = h_padded[(b - round_idx) % n_boards]
                 else:
                     h_pid = h_padded[b]
-                a_pid = a_padded[b]
+                pairs.append((h_pid, a_padded[b]))
+            return pairs
+
+        pairings = [_pairings_for_round(r) for r in range(n_rounds)]
+
+        # --- Results entry for All Play All (one column per round) ---
+        if is_all_play_all:
+            st.markdown("##### Results")
+            st.caption(_RESULT_HELP)
+            if not sheet_fill_colours:
+                st.caption("Auto colours are off — pick the colour drawn for "
+                           "the away team each round (home gets the opposite).")
+            round_cols = st.columns(n_rounds)
+            for r, round_col in enumerate(round_cols):
+                with round_col:
+                    home_colour, away_colour = _round_colours(r)
+                    suffix = f" ({home_colour}/{away_colour})" if home_colour else ""
+                    st.markdown(f"**Round {r + 1}{suffix}**")
+                    if not sheet_fill_colours:
+                        st.selectbox("Away colour", ["", "W", "B"],
+                                     key=f"colour_r{r}",
+                                     help="Colour drawn for the away team in "
+                                          "this round; home plays the opposite.")
+                    for b in range(n_boards):
+                        h_pid, a_pid = pairings[r][b]
+                        h_disp = player_data.get(h_pid, {}).get('display', '?') if h_pid else '—'
+                        a_disp = player_data.get(a_pid, {}).get('display', '?') if a_pid else '—'
+                        st.selectbox(f"Bd {b + 1}", RESULT_OPTIONS,
+                                     key=f"result_r{r}_b{b}",
+                                     help=f"{h_disp}  vs  {a_disp}")
+
+        # --- Build downloadable scoresheet PDF ---
+        def _build_round_rows(round_idx):
+            rows = []
+            for b, (h_pid, a_pid) in enumerate(pairings[round_idx]):
+                home_colour, away_colour = _board_colours(round_idx, b)
                 h = player_data.get(h_pid, {}) if h_pid else {}
                 a = player_data.get(a_pid, {}) if a_pid else {}
-                rows.append(f"""
-                    <tr>
-                        <td class="bd">{b + 1}</td>
-                        <td>{_cell(h.get('forename'))}</td>
-                        <td>{_cell(h.get('surname'))}</td>
-                        <td>{_cell(h.get('pnum'))}</td>
-                        <td>{_cell(h.get('rating_str'))}</td>
-                        <td>{home_colour}</td>
-                        <td class="result-cell">-</td>
-                        <td>{away_colour}</td>
-                        <td>{_cell(a.get('forename'))}</td>
-                        <td>{_cell(a.get('surname'))}</td>
-                        <td>{_cell(a.get('pnum'))}</td>
-                        <td>{_cell(a.get('rating_str'))}</td>
-                    </tr>
-                """)
-            heading = f'<h2 class="round-title">{html.escape(round_label)}</h2>' if round_label else ""
-            final_score_row = ""
-            if append_final_score:
-                # Sits inside the same table so the cell aligns under the
-                # round-total cell above it (and the per-board result cells).
-                final_score_row = """
-                    <tr class="final-score-row">
-                        <td colspan="6" class="final-score-label-cell">Final Score</td>
-                        <td class="final-score-cell">&nbsp;</td>
-                        <td colspan="5" style="border:none"></td>
-                    </tr>
-                """
-            return f"""
-            <div class="round-block">
-                {heading}
-                <table class="score">
-                    <thead>
-                        {column_header_html}
-                    </thead>
-                    <tbody>
-                        {''.join(rows)}
-                        <tr>
-                            <td colspan="6" style="border:none"></td>
-                            <td class="result-cell" style="background:#f4f4f4;height:2em">-</td>
-                            <td colspan="5" style="border:none"></td>
-                        </tr>
-                        {final_score_row}
-                    </tbody>
-                </table>
-            </div>
-            """
+                rows.append({
+                    'bd': b + 1,
+                    'h_forename': h.get('forename', ''),
+                    'h_surname': h.get('surname', ''),
+                    'h_pnum': h.get('pnum', '') if sheet_fill_pnums else '',
+                    'h_rating': h.get('rating_str', '') if sheet_fill_ratings else '',
+                    'h_colour': home_colour,
+                    'result': '-',
+                    'a_colour': away_colour,
+                    'a_forename': a.get('forename', ''),
+                    'a_surname': a.get('surname', ''),
+                    'a_pnum': a.get('pnum', '') if sheet_fill_pnums else '',
+                    'a_rating': a.get('rating_str', '') if sheet_fill_ratings else '',
+                })
+            return rows
 
         if is_all_play_all:
-            rounds_html = "".join(
-                _build_round_html(r, f"Round {r + 1}",
-                                  append_final_score=(r == n_rounds - 1))
-                for r in range(n_rounds)
-            )
+            rounds = [{'label': f"Round {r + 1}", 'rows': _build_round_rows(r)}
+                      for r in range(n_rounds)]
         else:
-            rounds_html = _build_round_html(0, None, append_final_score=True)
+            rounds = [{'label': None, 'rows': _build_round_rows(0)}]
 
         match_date = st.session_state.match_date
-        date_str = match_date.strftime("%d %B %Y") if match_date else ""
+        date_str = _format_match_date(match_date, date_format_choice)
 
-        scoresheet_html = f"""<!DOCTYPE html>
-<html>
-<head>
-<meta charset="utf-8">
-<title>{html.escape(title_text)}</title>
-<style>
-    @page {{ size: A4 landscape; margin: 1cm; }}
-    body {{
-        font-family: Arial, Helvetica, sans-serif;
-        margin: 0;
-        padding: 0.5cm;
-        color: #000;
-    }}
-    .header {{
-        display: flex;
-        justify-content: space-between;
-        align-items: baseline;
-        margin-bottom: 0.3em;
-    }}
-    .title {{ font-size: 1.6em; font-weight: bold; }}
-    .meta {{ display: flex; gap: 2em; font-size: 1em; }}
-    .meta-label {{ font-weight: bold; margin-right: 0.4em; }}
-    .meta-value {{
-        display: inline-block;
-        min-width: 9em;
-        border-bottom: 1px solid #000;
-        padding: 0 0.4em;
-    }}
-    .divider {{
-        border-top: 3px solid #000;
-        margin: 0.3em 0 0.4em 0;
-    }}
-    table.score {{
-        width: 100%;
-        border-collapse: collapse;
-        margin-top: 0.2em;
-    }}
-    table.score th, table.score td {{
-        border: 1px solid #000;
-        padding: 0.4em 0.3em;
-        text-align: center;
-        font-size: 0.95em;
-        height: 1.6em;
-    }}
-    table.score th {{ background: #e8e8e8; font-size: 0.85em; }}
-    .bd {{ background: #f4f4f4; font-weight: bold; width: 2em; }}
-    .result-cell {{ font-weight: bold; }}
-    .round-block {{
-        page-break-inside: avoid;
-        margin-top: 0.6em;
-    }}
-    .round-title {{
-        font-size: 1.2em;
-        font-weight: bold;
-        margin: 0.4em 0 0.2em 0;
-    }}
-    .teams-header {{
-        display: flex;
-        margin: 0.4em 0 0.2em 0;
-        font-size: 1.1em;
-        font-weight: bold;
-    }}
-    .teams-header .team {{ padding: 0 0.3em; }}
-    .teams-header .team-home {{ flex: 7; }}
-    .teams-header .team-away {{ flex: 5; }}
-    .team-label {{ color: #555; font-weight: normal; margin-right: 0.4em; }}
-    .team-value {{
-        display: inline-block;
-        border-bottom: 1px solid #000;
-        padding: 0 0.4em;
-        min-width: 12em;
-    }}
-    .final-score-row td {{
-        padding-top: 0.9em !important;
-    }}
-    .final-score-label-cell {{
-        border: none !important;
-        font-weight: bold;
-        text-align: right !important;
-        padding-right: 0.6em !important;
-    }}
-    .final-score-cell {{
-        background: #f4f4f4;
-        font-weight: bold;
-    }}
-    .total-wrap {{
-        display: flex;
-        margin-top: -1px;
-    }}
-    .total-spacer-l {{ flex: 0 0 auto; }}
-    .total-cell {{
-        border: 1px solid #000;
-        border-top: none;
-        padding: 0.4em;
-        text-align: left;
-        font-weight: bold;
-        background: #f4f4f4;
-    }}
-    .total-spacer-r {{ flex: 1; }}
-    .signatures {{
-        display: flex;
-        justify-content: space-between;
-        gap: 2em;
-        margin-top: 1em;
-    }}
-    .sig-block {{ flex: 1; }}
-    .sig-row {{
-        display: flex;
-        align-items: baseline;
-        margin-bottom: 0.6em;
-    }}
-    .sig-label {{
-        font-weight: bold;
-        min-width: 9em;
-    }}
-    .sig-line {{
-        flex: 1;
-        border-bottom: 1px solid #000;
-        height: 1.4em;
-        padding-left: 0.4em;
-    }}
-    @media print {{
-        body {{ padding: 0; }}
-    }}
-</style>
-</head>
-<body>
-    <div class="header">
-        <div class="title">{html.escape(title_text)}</div>
-        <div class="meta">
-            <div><span class="meta-label">Date:</span><span class="meta-value">{html.escape(date_str)}</span></div>
-            <div><span class="meta-label">Venue:</span><span class="meta-value">{html.escape(st.session_state.venue or '')}</span></div>
-        </div>
-    </div>
-    <div class="divider"></div>
-    {teams_header_html}
-    {rounds_html}
-    <div class="signatures">
-        <div class="sig-block">
-            <div class="sig-row">
-                <span class="sig-label">Home Captain:</span>
-                <span class="sig-line">{html.escape(_full_name(st.session_state.home_captain))}</span>
-            </div>
-            <div class="sig-row">
-                <span class="sig-label">Signature:</span>
-                <span class="sig-line">&nbsp;</span>
-            </div>
-        </div>
-        <div class="sig-block">
-            <div class="sig-row">
-                <span class="sig-label">Away Captain:</span>
-                <span class="sig-line">{html.escape(_full_name(st.session_state.away_captain))}</span>
-            </div>
-            <div class="sig-row">
-                <span class="sig-label">Signature:</span>
-                <span class="sig-line">&nbsp;</span>
-            </div>
-        </div>
-    </div>
-</body>
-</html>"""
+        # --- Match link + QR code (reloads this setup in the app) ---
+        def _payload_player(pid):
+            if str(pid).startswith("__blank_"):
+                return 0
+            d = player_data.get(pid, {})
+            return [d.get('full_name', ''), d.get('pnum', ''),
+                    d.get('rating_str', '')]
 
-        # --- Print button (opens scoresheet in new tab and triggers print) ---
+        link_payload = {
+            'v': 1,
+            't': 'A' if is_all_play_all else 'S',
+            'd': match_date.isoformat() if match_date else '',
+            'vn': st.session_state.venue or '',
+            'hn': st.session_state.home_team_name or '',
+            'an': st.session_state.away_team_name or '',
+            'hp': [_payload_player(pid) for pid in home_ids],
+            'ap': [_payload_player(pid) for pid in away_ids],
+            'hc': st.session_state.home_captain or '',
+            'ac': st.session_state.away_captain or '',
+            'o': [int(sheet_fill_pnums), int(sheet_fill_ratings),
+                  int(sheet_fill_colours)],
+            'df': DATE_FORMAT_OPTIONS.index(date_format_choice),
+        }
+        if is_all_play_all and not sheet_fill_colours:
+            drawn = "".join(st.session_state.get(f"colour_r{r}", "") or "-"
+                            for r in range(n_rounds))
+            if drawn.strip("-"):
+                link_payload['cr'] = drawn
+        if not is_all_play_all:
+            drawn = "".join(st.session_state.get(f"colour_r0_b{b}", "") or "-"
+                            for b in range(n_boards))
+            if drawn.strip("-"):
+                link_payload['cb'] = drawn
+
+        match_url = build_match_url(APP_BASE_URL, link_payload)
+
+        pdf_bytes = build_scoresheet_pdf(
+            title=title_text,
+            date_str=date_str,
+            venue=st.session_state.venue or "",
+            home_team=st.session_state.home_team_name or "",
+            away_team=st.session_state.away_team_name or "",
+            rounds=rounds,
+            home_captain=_full_name(st.session_state.home_captain),
+            away_captain=_full_name(st.session_state.away_captain),
+            qr_image=make_qr_image(match_url),
+        )
+
+        file_date = match_date.strftime("%Y-%m-%d") if match_date else "match"
         st.write("")
-        components.html(f"""
-<style>
-    .print-btn {{
-        background: #ff4b4b;
-        color: white;
-        border: none;
-        padding: 0.55rem 1.5rem;
-        border-radius: 0.4rem;
-        cursor: pointer;
-        font-size: 1rem;
-        font-weight: 500;
-        font-family: 'Source Sans Pro', sans-serif;
-    }}
-    .print-btn:hover {{ background: #ff6b6b; }}
-    .hint {{
-        color: #666;
-        font-size: 0.85rem;
-        margin-top: 0.4rem;
-        font-family: 'Source Sans Pro', sans-serif;
-    }}
-</style>
-<button class="print-btn" onclick="openPrintWindow()">🖨️ Print Scoresheet</button>
-<div class="hint">Opens the scoresheet in a new tab with the print dialog. Choose your printer or "Save as PDF".</div>
-<script>
-    function openPrintWindow() {{
-        var sheet = {json.dumps(scoresheet_html)};
-        var w = window.open('', '_blank');
-        if (!w) {{
-            alert('Pop-up blocked. Please allow pop-ups for this site and try again.');
-            return;
-        }}
-        w.document.open();
-        w.document.write(sheet);
-        w.document.close();
-        w.focus();
-        setTimeout(function() {{ w.print(); }}, 350);
-    }}
-</script>
-""", height=110)
+        st.download_button(
+            "⬇️ Download Scoresheet (PDF)",
+            data=pdf_bytes,
+            file_name=f"scoresheet_{file_date}.pdf",
+            mime="application/pdf",
+            type="primary",
+        )
+        st.caption("A4 landscape PDF — open it and print at 100% scale, "
+                   "from any device.")
+
+        with st.expander("Match link & QR code"):
+            st.caption(
+                "The QR code printed beside the signatures on the scoresheet "
+                "opens this link. Scanning it (or opening the link) reloads "
+                "this match setup — teams, boards, venue, date and options — "
+                "on any device, ready for entering results after the match. "
+                "Results and anything written on by hand aren't included."
+            )
+            st.code(match_url, language="text")
+
+        # --- Match Email ---
+        st.divider()
+        st.subheader("Match Email")
+        st.caption("Enter the board results above, then copy this summary "
+                   "for the results email group. Unentered results appear "
+                   "as '_' to fill in.")
+
+        def _email_player(pid):
+            if not pid:
+                return None
+            d = player_data.get(pid, {})
+            return {
+                'name': d.get('full_name', ''),
+                'pnum': d.get('pnum', ''),
+                'rating': d.get('rating_str', ''),
+            }
+
+        email_rounds = []
+        for r in range(n_rounds):
+            home_colour, away_colour = _round_colours(r)
+            pairs = []
+            for b, (h_pid, a_pid) in enumerate(pairings[r]):
+                # All Play All colours live in the round header; Standard
+                # colours are written per player on each board line.
+                h_col, a_col = ("", "") if is_all_play_all else _board_colours(r, b)
+                pairs.append({
+                    'home': _email_player(h_pid),
+                    'away': _email_player(a_pid),
+                    'result': st.session_state.get(f"result_r{r}_b{b}", ""),
+                    'home_colour': h_col,
+                    'away_colour': a_col,
+                })
+            email_rounds.append({
+                'colours': f"{home_colour}/{away_colour}" if home_colour else None,
+                'pairs': pairs,
+            })
+
+        _, computed_total, n_missing = compute_totals(email_rounds)
+        computed_str = (f"{format_points(computed_total[0])} - "
+                        f"{format_points(computed_total[1])}")
+
+        fs_col, _ = st.columns([1, 2])
+        final_input = fs_col.text_input(
+            "Final score (home - away)",
+            key="final_score_input",
+            placeholder=f"auto-filled: {computed_str}" if n_missing == 0
+            else "e.g. 9.5 - 6.5",
+            help="Leave blank to use the total of the entered board results.",
+        )
+
+        final_override = None
+        if final_input.strip():
+            m = re.match(r"^\s*(\d+(?:\.5)?)\s*[-–]\s*(\d+(?:\.5)?)\s*$",
+                         final_input)
+            if not m:
+                st.warning("Couldn't read the final score — enter it like "
+                           "'9.5 - 6.5'.")
+            else:
+                final_override = (float(m.group(1)), float(m.group(2)))
+                if n_missing == 0 and final_override != computed_total:
+                    st.warning(
+                        f"Something doesn't add up: the board results total "
+                        f"{computed_str}, but the final score entered is "
+                        f"{format_points(final_override[0])} - "
+                        f"{format_points(final_override[1])}. Check the "
+                        f"results or the final score."
+                    )
+        if n_missing:
+            st.info(f"{n_missing} board result(s) not entered yet.")
+
+        email_text = build_match_email(
+            home_team=st.session_state.home_team_name or "Home",
+            away_team=st.session_state.away_team_name or "Away",
+            date_str=date_str,
+            rounds=email_rounds,
+            is_all_play_all=is_all_play_all,
+            final_score=final_override,
+        )
+        st.code(email_text, language="text")
