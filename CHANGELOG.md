@@ -2,6 +2,21 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2026-06-12]
+
+### Known issues
+- **w/b and result dropdowns can still be too small in extremely narrow windows**: The slimming below fixes all realistic widths, but if the window is squeezed hard enough (e.g. dev tools docked beside a small window, at viewport widths just above the 640px column-stacking breakpoint) the Standard match's middle column shrinks to the point where the dropdown contents are cut off anyway — the column is physically narrower than the text. Harmless in practice: the opened dropdown list always renders full width, and typing `w` or `b` into the box and pressing Enter selects the colour without reading the box at all. Worth a deeper look if time allows — candidate fixes are stacking the Home/Result/Away columns earlier than 640px (CSS container query on the row), or giving the middle column a larger share of the row at narrow widths.
+
+### Added
+- **Pairing labels in result boxes**: Empty result dropdowns now show their pairing as grey placeholder text (e.g. `Loch - Smith`), in both the Standard result column and the All Play All results grid. The label adapts to a width budget, dropping detail until it fits: ratings first, then PNUMs, then forenames shrink to initials, then surnames alone, and as a last resort the longer surname is trimmed with `...` (`Lochmo... - Smith`). The full pairing remains in each box's hover tooltip.
+
+### Changed
+- **w/b boxes stay readable in squeezed windows**: In a narrowed window (e.g. dev tools open, snapped windows) the Standard match w/b dropdowns became too small to show the selected W/B at all — the default selectbox chrome (12px text padding plus a 32px chevron block) ate more width than the whole box. The w/b boxes now drop the chevron and centre the letter at every width (a chevron appearing only on wide monitors would make the box change shape with screen size); they still open on tap/click. Result dropdowns keep their chevron but get slimmer padding and icons, leaving more room for the result and pairing text.
+- **Captain and history buttons switched to Material icons**: The captain star had the same off-centre emoji problem as the sort/move-up buttons; it is now a `:material/star:` button that highlights (primary colour) for the current captain instead of swapping between ⭐ and ☆. The "◀️ Previous" / "Next ▶️" history buttons — whose text wrapped or clipped at some screen widths — are now icon-only arrow buttons (`:material/arrow_back:` / `:material/arrow_forward:`) with tooltips. Other emoji buttons are unchanged.
+- **Sort / move-up button icons centred**: The 🔽 and ⬆️ emoji sat visibly right of centre in their square buttons, for two stacked reasons: colour emoji glyphs draw their ink off-centre within the character's advance width, and Streamlit's default button padding (12px per side) overflowed the narrow icon columns — the left padding holds while the overflow clips on the right. Replaced the emoji with Material icon labels (`:material/sort:`, `:material/arrow_upward:`), made the move-up button fill its column like the sort button, and trimmed the horizontal padding on both via CSS. Verified pixel-centred at phone and desktop widths.
+- **Mobile portrait layout**: Streamlit stacks all columns vertically below 640px, which broke side-by-side controls on phones. A scoped CSS override now keeps marked rows horizontal on narrow screens: the Previous/Next history buttons, the four Data Options columns, the result tallies, the Sheet Options toggles, and — in the Scoresheet Maker — the team name/sort row, each star/name/up-arrow player row, and the w/b + result rows. The Home / Result / Away boxes themselves still stack on phones (there genuinely isn't room for three boxes across). Requires Streamlit ≥ 1.39 (keyed containers), reflected in `requirements.txt`.
+- **All Play All download placement**: The "Download Scoresheet (PDF)" button (and the match link/QR expander) now sit above the Results grid instead of below it, matching Standard's flow — the sheet is printed before any results exist.
+
 ## [2026-06-10]
 
 ### Added

@@ -2,3 +2,4 @@ __pycache__/
 *.pyc
 .streamlit
 .pytest_cache/
+problem_screenshots/

@@ -22,6 +22,73 @@ st.set_page_config(
     layout="wide"
 )
 
+# Streamlit stacks every st.columns row vertically once the viewport is
+# narrower than 640px, even when the row's content would fit side by side.
+# Rows wrapped in a container keyed "hflex_*" keep their column ratios on
+# phones; rows keyed "hfit_*" instead shrink each column to its content
+# width. Layouts above 640px are unaffected.
+st.markdown("""
+    <style>
+    /* Square icon buttons (sort / move-up / captain): trim the wide default
+       button padding so the icon always fits. When it doesn't fit, the left
+       padding holds and the overflow clips on the right, shoving the icon
+       off-centre in narrow columns. */
+    div[class*="st-key-sort_"] button,
+    div[class*="st-key-up_"] button,
+    div[class*="st-key-cap_"] button {
+        padding-left: 1px !important;
+        padding-right: 1px !important;
+        min-width: 0 !important;
+    }
+    /* w/b and result dropdowns: slim the inner padding and the chevron /
+       clear icons. The defaults (12px text padding plus a 32px chevron
+       block) eat more than the whole box in a squeezed window, hiding the
+       selected W/B and the result text entirely. */
+    div[class*="st-key-colour_"] [data-baseweb="select"] > div > div:first-child,
+    div[class*="st-key-result_"] [data-baseweb="select"] > div > div:first-child {
+        padding-left: 4px !important;
+        padding-right: 0 !important;
+    }
+    div[class*="st-key-colour_"] [data-baseweb="select"] > div > div:last-child,
+    div[class*="st-key-result_"] [data-baseweb="select"] > div > div:last-child {
+        padding-right: 2px !important;
+    }
+    div[class*="st-key-colour_"] svg[data-baseweb="icon"],
+    div[class*="st-key-result_"] svg[data-baseweb="icon"] {
+        width: 1rem;
+        height: 1rem;
+    }
+    /* The w/b boxes drop the chevron entirely and centre the letter: in a
+       squeezed window there is no room for both, and a chevron that only
+       appears on wide monitors would make the box change shape with screen
+       size. The box still opens on tap/click. */
+    div[class*="st-key-colour_"] [data-baseweb="select"] > div > div:last-child {
+        display: none;
+    }
+    div[class*="st-key-colour_"] [data-baseweb="select"] > div > div:first-child {
+        padding-left: 0 !important;
+        justify-content: center;
+        text-align: center;
+    }
+    @media (max-width: 640px) {
+        div[class*="st-key-hflex"] div[data-testid="stHorizontalBlock"],
+        div[class*="st-key-hfit"] div[data-testid="stHorizontalBlock"] {
+            flex-wrap: nowrap;
+        }
+        div[class*="st-key-hflex"] div[data-testid="stHorizontalBlock"]
+                > div[data-testid="stColumn"] {
+            min-width: 0 !important;
+        }
+        div[class*="st-key-hfit"] div[data-testid="stHorizontalBlock"]
+                > div[data-testid="stColumn"] {
+            min-width: 0 !important;
+            width: auto !important;
+            flex: 0 0 auto !important;
+        }
+    }
+    </style>
+""", unsafe_allow_html=True)
+
 # --- Load Club Data for UI ---
 CLUBS = get_clubs_list()
 CLUB_MAP = {c['code']: c['name'] for c in CLUBS}  # Code -> Name
@@ -159,7 +226,8 @@ st.markdown("Enter a list of player names below to retrieve their grading inform
 # --- 1. Top: Input Section ---
 
 # History Navigation
-hist_col1, hist_col2, _ = st.columns([1, 1, 8])
+with st.container(key="hfit_history"):
+    hist_col1, hist_col2, _ = st.columns([1, 1, 8])
 
 
 def on_prev():
@@ -188,10 +256,16 @@ def update_history():
 
 
 with hist_col1:
-    st.button("◀️ Previous", on_click=on_prev, disabled=(st.session_state.history_index <= 0))
+    st.button(":material/arrow_back:", key="hist_prev",
+              help="Previous search",
+              on_click=on_prev,
+              disabled=(st.session_state.history_index <= 0))
 
 with hist_col2:
-    st.button("Next ▶️", on_click=on_next, disabled=(st.session_state.history_index >= len(st.session_state.search_history) - 1))
+    st.button(":material/arrow_forward:", key="hist_next",
+              help="Next search",
+              on_click=on_next,
+              disabled=(st.session_state.history_index >= len(st.session_state.search_history) - 1))
 
 names_input = st.text_area(
     "Player Names (one per line)\nFormat: 'Name [PNUM]' or 'Name; Club' or 'Club:' for group",
@@ -203,7 +277,8 @@ names_input = st.text_area(
 # --- 2. Middle: Options (Landscape) ---
 st.subheader("Data Options")
 
-opt_col1, opt_col2, opt_col3, opt_col4 = st.columns(4)
+with st.container(key="hflex_options"):
+    opt_col1, opt_col2, opt_col3, opt_col4 = st.columns(4)
 
 with opt_col1:
     st.markdown("**General**")
@@ -354,7 +429,8 @@ if st.session_state.active_names:
     count_none = len(placeholders)
 
     # --- Result Tallies ---
-    t_col1, t_col2, t_col3 = st.columns(3)
+    with st.container(key="hflex_tallies"):
+        t_col1, t_col2, t_col3 = st.columns(3)
     t_col1.metric("Confident Matches", count_confident)
     t_col2.metric("Total Players Found", count_total)
     t_col3.metric("Not Found / Invalid", count_none)
@@ -481,7 +557,8 @@ if st.session_state.active_names:
         with st.expander("Sheet Options — pre-filled fields and date format"):
             st.caption("Unticked fields are left blank on the printout, "
                        "to be filled in by hand on the day.")
-            so_col1, so_col2, so_col3 = st.columns(3)
+            with st.container(key="hflex_sheetopts"):
+                so_col1, so_col2, so_col3 = st.columns(3)
             sheet_fill_pnums = so_col1.checkbox(
                 "PNUMs", value=True, key="sheet_fill_pnums")
             sheet_fill_ratings = so_col2.checkbox(
@@ -602,6 +679,49 @@ if st.session_state.active_names:
                     'pnum': '',
                 }
 
+        def _pairing_placeholder(h_pid, a_pid, budget=24):
+            """Grey 'Home - Away' text shown in an empty result box.
+
+            The server can't measure the box's true pixel width, so the
+            label is fitted to a character budget sized for the narrowest
+            realistic box instead, dropping detail until it fits: ratings
+            first, then pnums, then forenames shrink to initials, then
+            surnames alone, and as a last resort the surnames are trimmed
+            with '...'. The browser ellipsises anything still too wide.
+            """
+            def variants(pid):
+                d = player_data.get(pid, {}) if pid else {}
+                full = d.get('full_name', '')
+                if not full:
+                    return ["—"] * 5
+                pnum = f" [{d['pnum']}]" if d.get('pnum') else ""
+                rating = f" ({d['rating_str']})" if d.get('rating_str') else ""
+                return [f"{full}{pnum}{rating}", f"{full}{pnum}", full,
+                        _abbreviate(full), d.get('surname') or full]
+
+            def trim(text, allow):
+                if len(text) <= allow:
+                    return text
+                return text[:max(allow - 3, 1)] + "..."
+
+            h_variants, a_variants = variants(h_pid), variants(a_pid)
+            for h_txt, a_txt in zip(h_variants, a_variants):
+                if len(h_txt) + len(a_txt) + 3 <= budget:
+                    return f"{h_txt} - {a_txt}"
+
+            # Surnames alone still don't fit: split the budget between the
+            # sides, letting a short surname donate its spare room.
+            h_txt, a_txt = h_variants[-1], a_variants[-1]
+            total = budget - 3
+            half = total // 2
+            if len(h_txt) <= half:
+                h_allow, a_allow = len(h_txt), total - len(h_txt)
+            elif len(a_txt) <= total - half:
+                h_allow, a_allow = total - len(a_txt), len(a_txt)
+            else:
+                h_allow, a_allow = half, total - half
+            return f"{trim(h_txt, h_allow)} - {trim(a_txt, a_allow)}"
+
         v_col, d_col = st.columns([3, 1])
         with v_col:
             st.text_input("Venue", key="venue", placeholder="e.g. Stirling Chess Club")
@@ -610,12 +730,16 @@ if st.session_state.active_names:
 
         def _render_team(side, name_key, players_key, captain_key,
                          other_players_key, other_captain_key):
-            name_col, sort_col = st.columns([6, 1])
+            with st.container(key=f"hflex_teamname_{side}"):
+                name_col, sort_col = st.columns([6, 1])
             with name_col:
                 st.text_input(f"{side} Team Name", key=name_key,
                               label_visibility="collapsed")
             with sort_col:
-                if st.button("🔽", key=f"sort_{side}",
+                # Material icons, not emoji: colour emoji glyphs (🔽/⬆️) sit
+                # off-centre in their advance width, so they look misaligned
+                # in a small square button. Icon-font glyphs centre exactly.
+                if st.button(":material/sort:", key=f"sort_{side}",
                              help="Sort by rating (highest first)",
                              use_container_width=True):
                     st.session_state[players_key].sort(
@@ -627,7 +751,8 @@ if st.session_state.active_names:
             players = st.session_state[players_key]
             for idx, pid in enumerate(list(players)):
                 is_blank = str(pid).startswith("__blank_")
-                star_col, name_col, up_col = st.columns([1, 6, 1])
+                with st.container(key=f"hflex_player_{side}_{idx}"):
+                    star_col, name_col, up_col = st.columns([1, 6, 1])
                 if is_blank:
                     star_col.markdown("&nbsp;", unsafe_allow_html=True)
                     if name_col.button("✕  (blank — fill in on the day)",
@@ -638,10 +763,14 @@ if st.session_state.active_names:
                         st.rerun()
                 else:
                     is_captain = st.session_state[captain_key] == pid
-                    star_icon = "⭐" if is_captain else "☆"
                     label = player_data.get(pid, {}).get('display', pid)
-                    if star_col.button(star_icon, key=f"cap_{side}_{pid}",
-                                       help="Set as captain"):
+                    if star_col.button(":material/star:",
+                                       key=f"cap_{side}_{pid}",
+                                       type="primary" if is_captain
+                                       else "secondary",
+                                       use_container_width=True,
+                                       help="Unset captain" if is_captain
+                                       else "Set as captain"):
                         st.session_state[captain_key] = None if is_captain else pid
                         st.rerun()
                     if name_col.button(label, key=f"name_{side}_{pid}",
@@ -652,7 +781,9 @@ if st.session_state.active_names:
                         if st.session_state[captain_key] == pid:
                             st.session_state[captain_key] = None
                         st.rerun()
-                if up_col.button("⬆️", key=f"up_{side}_{pid}",
+                if up_col.button(":material/arrow_upward:",
+                                 key=f"up_{side}_{pid}",
+                                 use_container_width=True,
                                  help="Move up one board (wraps to bottom)"):
                     if idx == 0:
                         players.append(players.pop(0))
@@ -690,14 +821,24 @@ if st.session_state.active_names:
         if mid_col is not None:
             with mid_col:
                 with st.container(border=True):
-                    cap_c, cap_r = st.columns([1, 2])
+                    with st.container(key="hflex_rescap"):
+                        cap_c, cap_r = st.columns([1, 2])
                     cap_c.caption("Home w/b")
                     cap_r.caption("Result")
                     st.markdown("&nbsp;", unsafe_allow_html=True)
                     n_result_rows = max(len(st.session_state.home_players),
                                         len(st.session_state.away_players), 1)
                     for b in range(n_result_rows):
-                        c_col, r_col = st.columns([1, 2])
+                        h_pid = (st.session_state.home_players[b]
+                                 if b < len(st.session_state.home_players)
+                                 else None)
+                        a_pid = (st.session_state.away_players[b]
+                                 if b < len(st.session_state.away_players)
+                                 else None)
+                        h_disp = player_data.get(h_pid, {}).get('display', '—') if h_pid else '—'
+                        a_disp = player_data.get(a_pid, {}).get('display', '—') if a_pid else '—'
+                        with st.container(key=f"hflex_resrow_{b}"):
+                            c_col, r_col = st.columns([1, 2])
                         c_col.selectbox(f"Board {b + 1} home colour",
                                         ["", "W", "B"],
                                         key=f"colour_r0_b{b}",
@@ -706,8 +847,11 @@ if st.session_state.active_names:
                                              "board; away gets the opposite.")
                         r_col.selectbox(f"Board {b + 1} result", RESULT_OPTIONS,
                                         key=f"result_r0_b{b}",
+                                        index=None,
+                                        placeholder=_pairing_placeholder(h_pid, a_pid),
                                         label_visibility="collapsed",
-                                        help=_RESULT_HELP)
+                                        help=f"{h_disp}  vs  {a_disp}. "
+                                             f"{_RESULT_HELP}")
         with away_col:
             with st.container(border=True):
                 st.caption("Away")
@@ -761,32 +905,6 @@ if st.session_state.active_names:
             return pairs
 
         pairings = [_pairings_for_round(r) for r in range(n_rounds)]
-
-        # --- Results entry for All Play All (one column per round) ---
-        if is_all_play_all:
-            st.markdown("##### Results")
-            st.caption(_RESULT_HELP)
-            if not sheet_fill_colours:
-                st.caption("Auto colours are off — pick the colour drawn for "
-                           "the away team each round (home gets the opposite).")
-            round_cols = st.columns(n_rounds)
-            for r, round_col in enumerate(round_cols):
-                with round_col:
-                    home_colour, away_colour = _round_colours(r)
-                    suffix = f" ({home_colour}/{away_colour})" if home_colour else ""
-                    st.markdown(f"**Round {r + 1}{suffix}**")
-                    if not sheet_fill_colours:
-                        st.selectbox("Away colour", ["", "W", "B"],
-                                     key=f"colour_r{r}",
-                                     help="Colour drawn for the away team in "
-                                          "this round; home plays the opposite.")
-                    for b in range(n_boards):
-                        h_pid, a_pid = pairings[r][b]
-                        h_disp = player_data.get(h_pid, {}).get('display', '?') if h_pid else '—'
-                        a_disp = player_data.get(a_pid, {}).get('display', '?') if a_pid else '—'
-                        st.selectbox(f"Bd {b + 1}", RESULT_OPTIONS,
-                                     key=f"result_r{r}_b{b}",
-                                     help=f"{h_disp}  vs  {a_disp}")
 
         # --- Build downloadable scoresheet PDF ---
         def _build_round_rows(round_idx):
@@ -890,6 +1008,36 @@ if st.session_state.active_names:
             )
             st.code(match_url, language="text")
 
+        # --- Results entry for All Play All (one column per round) ---
+        # Rendered after the download button: the sheet can be printed before
+        # any results exist, so the download comes first on the page.
+        if is_all_play_all:
+            st.markdown("##### Results")
+            st.caption(_RESULT_HELP)
+            if not sheet_fill_colours:
+                st.caption("Auto colours are off — pick the colour drawn for "
+                           "the away team each round (home gets the opposite).")
+            round_cols = st.columns(n_rounds)
+            for r, round_col in enumerate(round_cols):
+                with round_col:
+                    home_colour, away_colour = _round_colours(r)
+                    suffix = f" ({home_colour}/{away_colour})" if home_colour else ""
+                    st.markdown(f"**Round {r + 1}{suffix}**")
+                    if not sheet_fill_colours:
+                        st.selectbox("Away colour", ["", "W", "B"],
+                                     key=f"colour_r{r}",
+                                     help="Colour drawn for the away team in "
+                                          "this round; home plays the opposite.")
+                    for b in range(n_boards):
+                        h_pid, a_pid = pairings[r][b]
+                        h_disp = player_data.get(h_pid, {}).get('display', '?') if h_pid else '—'
+                        a_disp = player_data.get(a_pid, {}).get('display', '?') if a_pid else '—'
+                        st.selectbox(f"Bd {b + 1}", RESULT_OPTIONS,
+                                     key=f"result_r{r}_b{b}",
+                                     index=None,
+                                     placeholder=_pairing_placeholder(h_pid, a_pid),
+                                     help=f"{h_disp}  vs  {a_disp}")
+
         # --- Match Email ---
         st.divider()
         st.subheader("Match Email")
@@ -918,7 +1066,7 @@ if st.session_state.active_names:
                 pairs.append({
                     'home': _email_player(h_pid),
                     'away': _email_player(a_pid),
-                    'result': st.session_state.get(f"result_r{r}_b{b}", ""),
+                    'result': st.session_state.get(f"result_r{r}_b{b}") or "",
                     'home_colour': h_col,
                     'away_colour': a_col,
                 })

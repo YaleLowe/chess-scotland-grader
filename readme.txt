@@ -64,9 +64,9 @@ E. 2-Letter Club Code Shortcut:
 ------------------------------------------------------------------------
 3. NAVIGATION & HISTORY
 ------------------------------------------------------------------------
-- PREVIOUS / NEXT: Use the buttons at the top to cycle through searches
-  you have run during this session. Useful for switching between two
-  team lists without retyping.
+- PREVIOUS / NEXT: Use the arrow buttons at the top to cycle through
+  searches you have run during this session. Useful for switching
+  between two team lists without retyping.
 - CACHING: Results are cached for the session. Re-submitting the same
   name does not make a new network request.
 - REFRESH: To force a fresh fetch for a name, clear the cache by
@@ -146,9 +146,10 @@ into a printable match scoresheet.
                     to leave it blank for filling in by hand on the day.
 
   TEAMS           — Click a player's name to move them to the other
-                    team, the star to mark them as captain, and the
-                    arrow to move them up a board. Blank rows can be
-                    added for players to be named on the day.
+                    team, the star to mark them as captain (the button
+                    highlights for the current captain), and the arrow
+                    to move them up a board. Blank rows can be added
+                    for players to be named on the day.
 
   PRINTING        — The Download button saves the sheet as an A4
                     landscape PDF, ready to print at 100% scale from
@@ -163,8 +164,11 @@ into a printable match scoresheet.
 
   RESULTS         — For Standard matches, enter each board's result in
                     the column between the two team boxes. For All Play
-                    All, a results grid appears below the teams with one
-                    column per round. Options (home score first):
+                    All, a results grid appears below the download button
+                    with one column per round (so the sheet can be
+                    printed before any results exist). Empty result boxes
+                    show their pairing in grey (e.g. "Loch - Smith"),
+                    trimmed to fit the box. Options (home score first):
                     1 - 0, 0.5 - 0.5, 0 - 1, plus defaults: "1 - D"
                     (away player absent), "D - 1" (home player absent),
                     "D - D" (both absent — scored as a draw). A present
